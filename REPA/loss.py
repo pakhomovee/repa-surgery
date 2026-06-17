@@ -78,15 +78,16 @@ class SILoss:
         denoising_loss = mean_flat((model_output - model_target) ** 2)
 
         # projection loss (skipped when there are no encoder targets => baseline)
+        # Vectorized over the batch: the original looped over batch elements in
+        # Python, launching O(batch) tiny CUDA kernels per step and starving the
+        # GPU. This computes the same mean cosine alignment in a few ops.
         if zs is not None and len(zs) > 0:
             proj_loss = 0.
-            bsz = zs[0].shape[0]
-            for i, (z, z_tilde) in enumerate(zip(zs, zs_tilde)):
-                for j, (z_j, z_tilde_j) in enumerate(zip(z, z_tilde)):
-                    z_tilde_j = torch.nn.functional.normalize(z_tilde_j, dim=-1)
-                    z_j = torch.nn.functional.normalize(z_j, dim=-1)
-                    proj_loss += mean_flat(-(z_j * z_tilde_j).sum(dim=-1))
-            proj_loss /= (len(zs) * bsz)
+            for z, z_tilde in zip(zs, zs_tilde):
+                z = torch.nn.functional.normalize(z, dim=-1)          # (B, T, D)
+                z_tilde = torch.nn.functional.normalize(z_tilde, dim=-1)
+                proj_loss = proj_loss - (z * z_tilde).sum(dim=-1).mean()  # mean over B, T
+            proj_loss = proj_loss / len(zs)
         else:
             proj_loss = torch.zeros((), device=images.device)
 
