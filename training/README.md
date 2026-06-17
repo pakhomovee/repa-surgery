@@ -76,6 +76,25 @@ projectors, repa does) without extra flags. Uses EMA weights by default
 (`--weights model` for the raw model); labels are spread evenly across classes
 (`--random-labels` to randomize); `--mode sde` switches euler→euler-maruyama.
 
+## Checking for memorization
+
+[`memorization.py`](memorization.py) checks whether a checkpoint copies training
+images: it generates samples, featurizes the whole training set with DINOv2-B
+(**sharded across the `--gpus`**), finds each sample's nearest neighbours by
+cosine similarity, and writes a `generated | NN1 | NN2 …` grid plus stats:
+
+```bash
+python training/memorization.py \
+  --ckpt ../runs/celeba_sit-b_2_baseline/checkpoints/0020000.pt \
+  --gpus 0,1 --num-samples 32 --topk 4
+# -> ../runs/.../memorization/0020000_nn.png  + a printed top-1 similarity report
+```
+
+Rows are sorted most-suspicious-first; a high top-1 cosine (> `--threshold`,
+default 0.95) flags a likely copy. CelebA faces look alike, so read the grid
+*with* the stats — judge "new plausible face" vs "pixel-level copy of a specific
+training image". Use `--max-train` to subsample the search for a quick pass.
+
 ## Per-dataset envs
 
 Each dataset is one file in [`envs/`](envs/) holding its `DATA_DIR`,
