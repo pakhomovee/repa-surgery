@@ -1,0 +1,11 @@
+# Extra deps the pipeline needs beyond REPA/requirements.txt:
+#   - click:   REPA/preprocessing/dataset_tools.py CLI
+#   - pyspng:  fast PNG decode in REPA/dataset.py CustomDataset (optional but fast)
+#   - gdown:   CelebA download in datasets/celeba.py
+#   - natsort: stable CelebA filename ordering in datasets/celeba.py
+#   - pillow:  image IO (usually pulled in by torchvision, pinned here to be safe)
+click
+pyspng
+gdown
+natsort
+pillow
