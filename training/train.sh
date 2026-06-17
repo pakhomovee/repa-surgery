@@ -19,8 +19,12 @@
 #       --checkpointing-steps N
 #       --max-train-steps N
 #       --exp-name NAME       run name (default: auto from dataset/model/enc)
-#       --mode MODE           "repa" (encoder alignment, default) or "baseline"
-#                             (plain SiT: enc-type=none, proj-coeff=0)
+#       --mode MODE           one of:
+#                               repa       encoder alignment (default)
+#                               baseline   plain SiT (enc-type=none, proj-coeff=0)
+#                               haste      alignment until HASTE_END_STEP, then
+#                                          pure diffusion (REPA early-stopping)
+#                               repa-sigma PCGrad gradient surgery (forces bf16)
 #       --baseline            shortcut for --mode baseline
 #       --prepare             run dataset prep before training
 #       --skip-setup          skip env + dependency setup
@@ -78,8 +82,8 @@ ENV_FILE="$SCRIPT_DIR/envs/${DATASET}.env"
 [[ -f "$ENV_FILE" ]] || die "No env file: $ENV_FILE"
 
 case "$MODE" in
-  repa|baseline) ;;
-  *) die "Invalid --mode '$MODE' (expected 'repa' or 'baseline')" ;;
+  repa|baseline|haste|repa-sigma) ;;
+  *) die "Invalid --mode '$MODE' (expected 'repa', 'baseline', 'haste', or 'repa-sigma')" ;;
 esac
 
 # ---- Environment setup -----------------------------------------------------
@@ -119,17 +123,28 @@ NUM_WORKERS="${NUM_WORKERS:-$DEFAULT_NUM_WORKERS}"
 CHECKPOINTING_STEPS="${CHECKPOINTING_STEPS:-$DEFAULT_CHECKPOINTING_STEPS}"
 MAX_TRAIN_STEPS="${MAX_TRAIN_STEPS:-$DEFAULT_MAX_TRAIN_STEPS}"
 
-# baseline mode => disable encoder alignment; repa mode keeps the env's enc.
-if [[ "$MODE" == "baseline" ]]; then
-  ENC_TYPE="none"
-  PROJ_COEFF=0.0
-fi
+# ---- Mode-specific configuration -------------------------------------------
+# baseline: no alignment.  repa: alignment from env.  haste: alignment until a
+# termination step, then pure diffusion.  repa-sigma: PCGrad gradient surgery.
+PRECISION="fp16"
+MODE_ARGS=()
+case "$MODE" in
+  baseline)
+    ENC_TYPE="none"; PROJ_COEFF=0.0 ;;
+  repa)
+    ;;
+  haste)
+    MODE_ARGS+=("--alignment-end-step=${HASTE_END_STEP:-100000}") ;;
+  repa-sigma)
+    # Manual two-gradient surgery is incompatible with fp16's GradScaler.
+    PRECISION="bf16"
+    MODE_ARGS+=("--grad-surgery" "--grad-ema-decay=${GRAD_EMA_DECAY:-0.99}") ;;
+esac
 
-# Auto exp-name, e.g. celeba_sit_b2_dinov2-vit-b  /  celeba_sit_b2_baseline
+# Auto exp-name, e.g. celeba_sit-b_2_repa  /  celeba_sit-b_2_haste
 if [[ -z "$EXP_NAME" ]]; then
   _m="$(echo "$MODEL" | tr 'A-Z/' 'a-z_' | tr -d ' ')"
-  if [[ "$ENC_TYPE" == "none" ]]; then _tag="baseline"; else _tag="$ENC_TYPE"; fi
-  EXP_NAME="${DATASET}_${_m}_${_tag}"
+  EXP_NAME="${DATASET}_${_m}_${MODE}"
 fi
 
 # ---- Build launch command --------------------------------------------------
@@ -139,17 +154,17 @@ export OMP_NUM_THREADS="${OMP_NUM_THREADS:-16}"
 export MKL_NUM_THREADS="${MKL_NUM_THREADS:-16}"
 
 log "dataset=$DATASET model=$MODEL gpus=$GPUS (procs=$NUM_PROCESSES) bs=$BATCH_SIZE"
-log "enc-type=$ENC_TYPE proj-coeff=$PROJ_COEFF exp-name=$EXP_NAME"
+log "mode=$MODE enc-type=$ENC_TYPE proj-coeff=$PROJ_COEFF precision=$PRECISION exp-name=$EXP_NAME"
 
 CMD=(
   accelerate launch
     --num_processes "$NUM_PROCESSES"
-    --mixed_precision "fp16"
+    --mixed_precision "$PRECISION"
     --main_process_port "${MAIN_PROCESS_PORT:-29521}"
   train.py
     --report-to="${REPORT_TO:-tensorboard}"
     --allow-tf32
-    --mixed-precision="fp16"
+    --mixed-precision="$PRECISION"
     --seed=0
     --path-type="$PATH_TYPE"
     --prediction="$PREDICTION"
@@ -170,6 +185,7 @@ CMD=(
     --sampling-steps="${DEFAULT_SAMPLING_STEPS}"
     --num-workers="$NUM_WORKERS"
 )
+CMD+=(${MODE_ARGS[@]+"${MODE_ARGS[@]}"})
 CMD+=(${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"})
 
 if [[ "$DRY_RUN" == "1" ]]; then

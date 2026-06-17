@@ -26,12 +26,26 @@ training/train.sh --dataset celeba --gpus 0,1,2,3 \
 training/train.sh --dataset celeba --gpus 0 --mode baseline
 ```
 
-## Training mode
+## Training modes
 
-`--mode repa` (default) trains with representation alignment using the encoder
-configured in the dataset env (`ENC_TYPE`/`PROJ_COEFF`). `--mode baseline`
-(alias: `--baseline`) trains plain SiT with `enc-type=none, proj-coeff=0`. The
-mode is reflected in the auto exp-name (`..._dinov2-vit-b` vs `..._baseline`).
+`--mode` selects the training variant (reflected in the auto exp-name, e.g.
+`celeba_sit-b_2_haste`):
+
+| mode | what it does |
+|------|--------------|
+| `repa` (default) | Representation alignment with the env's `ENC_TYPE`/`PROJ_COEFF` (DINOv2, 0.5). |
+| `baseline` (alias `--baseline`) | Plain SiT, `enc-type=none, proj-coeff=0`. |
+| `haste` | REPA alignment until `HASTE_END_STEP` (default 100k), then pure diffusion loss. Implements the "stage-wise termination" of *REPA Works Until It Doesn't* (arXiv 2505.16792). |
+| `repa-sigma` | PCGrad-style gradient surgery: keeps an EMA of the diffusion gradient as a stable reference; when the alignment gradient is anticorrelated with it (`⟨g_ema,g_repa⟩<0`), the conflicting component is projected out before the update. **Forces bf16** (fp16's GradScaler is incompatible with manually-assembled gradients). |
+
+Mode knobs live in the dataset env: `HASTE_END_STEP` (haste) and
+`GRAD_EMA_DECAY` (repa-sigma, default 0.99).
+
+Implementation note: `haste` and `repa-sigma` are backed by new `train.py`
+flags (`--alignment-end-step`, `--grad-surgery`/`--grad-ema-decay`). `repa-sigma`
+computes the two gradients with `torch.autograd.grad` (one shared forward),
+all-reduces them manually across ranks (bypassing DDP), then assembles `.grad`
+— so it needs `--gradient-accumulation-steps=1`.
 
 `--dry-run` prints the exact `accelerate` command without launching.
 
@@ -42,6 +56,25 @@ CLI flags override the dataset env defaults: `--gpus`, `--model`,
 `--exp-name`. `--gpus 0,1,2,3` both sets `CUDA_VISIBLE_DEVICES` and derives the
 number of `accelerate` processes. Anything after `--` is passed verbatim to
 `train.py`. Run `training/train.sh --help` for the full list.
+
+## Inspecting samples
+
+Training only logs sample grids at step 1, and with `report-to=tensorboard`
+those images are dropped (the TB tracker logs scalars only). To eyeball quality
+from a checkpoint, use [`sample.py`](sample.py) — it writes a PNG grid to disk:
+
+```bash
+python training/sample.py \
+  --ckpt ../runs/celeba_sit-b_2_baseline/checkpoints/0020000.pt \
+  --num-samples 64 --cfg-scale 1.5
+# -> ../runs/celeba_sit-b_2_baseline/samples/0020000_cfg1.5_ode.png  (scp & view)
+```
+
+It rebuilds the model from the args saved in the checkpoint and infers the
+projector shapes from the weights, so it works for any mode (baseline has no
+projectors, repa does) without extra flags. Uses EMA weights by default
+(`--weights model` for the raw model); labels are spread evenly across classes
+(`--random-labels` to randomize); `--mode sde` switches euler→euler-maruyama.
 
 ## Per-dataset envs
 

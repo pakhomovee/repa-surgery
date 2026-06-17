@@ -36,6 +36,22 @@ logger = get_logger(__name__)
 CLIP_DEFAULT_MEAN = (0.48145466, 0.4578275, 0.40821073)
 CLIP_DEFAULT_STD = (0.26862954, 0.26130258, 0.27577711)
 
+
+def _allreduce_mean(tensors, world_size):
+    """Average a list of per-parameter gradient tensors across DDP ranks.
+
+    Used by REPA-sigma, which computes gradients via torch.autograd.grad and
+    therefore bypasses DDP's automatic reduction. Flattens into a single
+    buffer so the whole list is reduced in one all-reduce.
+    """
+    import torch.distributed as dist
+    from torch._utils import _flatten_dense_tensors, _unflatten_dense_tensors
+    flat = _flatten_dense_tensors(tensors)
+    dist.all_reduce(flat, op=dist.ReduceOp.SUM)
+    flat /= world_size
+    return list(_unflatten_dense_tensors(flat, tensors))
+
+
 def preprocess_raw_image(x, enc_type):
     resolution = x.shape[-1]
     if 'clip' in enc_type:
@@ -130,6 +146,17 @@ def main(args):
         log_with=args.report_to,
         project_config=accelerator_project_config,
     )
+
+    if args.grad_surgery:
+        # Manual two-gradient assembly is incompatible with fp16's GradScaler,
+        # and the simple per-step surgery below assumes no grad accumulation.
+        if args.mixed_precision == "fp16":
+            raise ValueError(
+                "--grad-surgery (REPA-sigma) requires --mixed-precision=bf16 (or no); "
+                "fp16 uses a GradScaler that conflicts with manual gradients."
+            )
+        if args.gradient_accumulation_steps != 1:
+            raise ValueError("--grad-surgery requires --gradient-accumulation-steps=1.")
 
     if accelerator.is_main_process:
         os.makedirs(args.output_dir, exist_ok=True)  # Make results folder (holds all experiment subfolders)
@@ -279,7 +306,11 @@ def main(args):
     # Create sampling noise:
     n = ys.size(0)
     xT = torch.randn((n, 4, latent_size, latent_size), device=device)
-        
+
+    # REPA-sigma: running EMA of the (synced) diffusion gradient, kept as a
+    # list of per-parameter tensors. Lazily initialized on the first step.
+    grad_ema = None
+
     for epoch in range(args.epochs):
         model.train()
         for raw_image, x, y in train_dataloader:
@@ -306,23 +337,75 @@ def main(args):
                         if 'dinov2' in encoder_type: z = z['x_norm_patchtokens']
                         zs.append(z)
 
-            with accelerator.accumulate(model):
+            # HASTE: disable the alignment loss after the termination step.
+            proj_coeff = args.proj_coeff
+            if args.alignment_end_step >= 0 and global_step >= args.alignment_end_step:
+                proj_coeff = 0.0
+
+            if args.grad_surgery:
+                # REPA-sigma: PCGrad-style surgery between diffusion and
+                # alignment gradients (no accelerator.accumulate / DDP reducer).
                 model_kwargs = dict(y=labels)
-                loss, proj_loss = loss_fn(model, x, model_kwargs, zs=zs)
-                loss_mean = loss.mean()
-                proj_loss_mean = proj_loss.mean()
-                loss = loss_mean + proj_loss_mean * args.proj_coeff
-                    
-                ## optimization
-                accelerator.backward(loss)
-                if accelerator.sync_gradients:
-                    params_to_clip = model.parameters()
-                    grad_norm = accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
+                with accelerator.no_sync(model):
+                    loss, proj_loss = loss_fn(model, x, model_kwargs, zs=zs)
+                    loss_mean = loss.mean()
+                    proj_loss_mean = proj_loss.mean()
+                    params = [p for p in model.parameters() if p.requires_grad]
+                    # Local per-parameter grads of each term (one shared forward).
+                    g_diff = torch.autograd.grad(
+                        loss_mean, params, retain_graph=True, allow_unused=True)
+                    g_repa = torch.autograd.grad(
+                        proj_loss_mean * proj_coeff, params, allow_unused=True)
+                g_diff = [g if g is not None else torch.zeros_like(p)
+                          for g, p in zip(g_diff, params)]
+                g_repa = [g if g is not None else torch.zeros_like(p)
+                          for g, p in zip(g_repa, params)]
+                # We bypassed DDP, so average grads across ranks manually.
+                if accelerator.num_processes > 1:
+                    g_diff = _allreduce_mean(g_diff, accelerator.num_processes)
+                    g_repa = _allreduce_mean(g_repa, accelerator.num_processes)
+
+                # EMA of the diffusion gradient = stable reference direction.
+                if grad_ema is None:
+                    grad_ema = [g.detach().clone() for g in g_diff]
+                else:
+                    for e, g in zip(grad_ema, g_diff):
+                        e.mul_(args.grad_ema_decay).add_(g, alpha=1 - args.grad_ema_decay)
+
+                # PCGrad: if alignment grad conflicts with the (EMA) diffusion
+                # direction, project out the anticorrelated component.
+                dot = sum((gr * e).sum() for gr, e in zip(g_repa, grad_ema)).item()
+                if dot < 0:
+                    ema_sq = sum((e * e).sum() for e in grad_ema).item() + 1e-12
+                    scale = dot / ema_sq  # python float; identical across ranks
+                    for gr, e in zip(g_repa, grad_ema):
+                        gr.add_(e, alpha=-scale)
+
+                # Combined update direction.
+                for p, gd, gr in zip(params, g_diff, g_repa):
+                    p.grad = gd + gr
+                grad_norm = accelerator.clip_grad_norm_(params, args.max_grad_norm)
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
+                update_ema(ema, model)
+            else:
+                with accelerator.accumulate(model):
+                    model_kwargs = dict(y=labels)
+                    loss, proj_loss = loss_fn(model, x, model_kwargs, zs=zs)
+                    loss_mean = loss.mean()
+                    proj_loss_mean = proj_loss.mean()
+                    loss = loss_mean + proj_loss_mean * proj_coeff
 
-                if accelerator.sync_gradients:
-                    update_ema(ema, model) # change ema function
+                    ## optimization
+                    accelerator.backward(loss)
+                    if accelerator.sync_gradients:
+                        params_to_clip = model.parameters()
+                        grad_norm = accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
+                    optimizer.step()
+                    optimizer.zero_grad(set_to_none=True)
+
+                    if accelerator.sync_gradients:
+                        update_ema(ema, model) # change ema function
             
             ### enter
             if accelerator.sync_gradients:
@@ -440,6 +523,18 @@ def parse_args(input_args=None):
     parser.add_argument("--proj-coeff", type=float, default=0.5)
     parser.add_argument("--weighting", default="uniform", type=str, help="Max gradient norm.")
     parser.add_argument("--legacy", action=argparse.BooleanOptionalAction, default=False)
+
+    # HASTE: stage-wise termination of representation alignment.
+    # After this many optimizer steps, the alignment (proj) loss is disabled
+    # and training continues on the pure denoising loss. -1 => never (plain REPA).
+    parser.add_argument("--alignment-end-step", type=int, default=-1)
+
+    # REPA-sigma: PCGrad-style gradient surgery between the diffusion and
+    # alignment gradients, using an EMA of the diffusion gradient as the stable
+    # reference direction. Requires bf16 (fp16 GradScaler is incompatible with
+    # manually-assembled gradients).
+    parser.add_argument("--grad-surgery", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--grad-ema-decay", type=float, default=0.99)
 
     if input_args is not None:
         args = parser.parse_args(input_args)
