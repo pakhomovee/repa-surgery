@@ -97,6 +97,11 @@ log "Loading dataset env: $ENV_FILE"
 # shellcheck disable=SC1090
 source "$ENV_FILE"
 
+# Resolve GPUs early so dataset prep (multi-GPU VAE encode) can use them.
+GPUS="${GPUS:-${CUDA_VISIBLE_DEVICES:-0}}"
+NUM_PROCESSES="$(count_gpus "$GPUS")"
+export GPUS
+
 # ---- Dataset preparation ---------------------------------------------------
 if [[ "$DO_PREPARE" == "1" ]]; then
   if declare -F prepare_dataset >/dev/null; then
@@ -113,8 +118,6 @@ BATCH_SIZE="${BATCH_SIZE:-$DEFAULT_BATCH_SIZE}"
 NUM_WORKERS="${NUM_WORKERS:-$DEFAULT_NUM_WORKERS}"
 CHECKPOINTING_STEPS="${CHECKPOINTING_STEPS:-$DEFAULT_CHECKPOINTING_STEPS}"
 MAX_TRAIN_STEPS="${MAX_TRAIN_STEPS:-$DEFAULT_MAX_TRAIN_STEPS}"
-GPUS="${GPUS:-${CUDA_VISIBLE_DEVICES:-0}}"
-NUM_PROCESSES="$(count_gpus "$GPUS")"
 
 # baseline mode => disable encoder alignment; repa mode keeps the env's enc.
 if [[ "$MODE" == "baseline" ]]; then
