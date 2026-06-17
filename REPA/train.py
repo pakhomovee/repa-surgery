@@ -161,7 +161,9 @@ def main(args):
             )
     else:
         encoders, encoder_types, architectures = [], [], []
-    z_dims = [encoder.embed_dim for encoder in encoders] if len(encoders) > 0 else [0]
+    # No encoders => no projectors at all (empty list). This avoids DDP
+    # "parameter did not receive grad" errors from unused projector weights.
+    z_dims = [encoder.embed_dim for encoder in encoders] if len(encoders) > 0 else []
     block_kwargs = {"fused_attn": args.fused_attn, "qk_norm": args.qk_norm}
     model = SiT_models[args.model](
         input_size=latent_size,
@@ -272,7 +274,7 @@ def main(args):
     gt_xs = sample_posterior(
         gt_xs.to(device), latents_scale=latents_scale, latents_bias=latents_bias
         )
-    ys = torch.randint(1000, size=(sample_batch_size,), device=device)
+    ys = torch.randint(args.num_classes, size=(sample_batch_size,), device=device)
     ys = ys.to(device)
     # Create sampling noise:
     n = ys.size(0)
@@ -352,6 +354,7 @@ def main(args):
                         guidance_high=1.,
                         path_type=args.path_type,
                         heun=False,
+                        num_classes=args.num_classes,
                     ).to(torch.float32)
                     samples = vae.decode((samples -  latents_bias) / latents_scale).sample
                     gt_samples = vae.decode((gt_xs - latents_bias) / latents_scale).sample

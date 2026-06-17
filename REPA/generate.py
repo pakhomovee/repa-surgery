@@ -132,6 +132,7 @@ def main(args):
             guidance_low=args.guidance_low,
             guidance_high=args.guidance_high,
             path_type=args.path_type,
+            num_classes=args.num_classes,
         )
         with torch.no_grad():
             if args.mode == "sde":
