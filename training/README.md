@@ -23,8 +23,15 @@ training/train.sh --dataset celeba --gpus 0,1,2,3 \
   --model SiT-B/2 --batch-size 256 --num-workers 4 --checkpointing-steps 10000
 
 # Plain SiT baseline (no DINOv2 alignment):
-training/train.sh --dataset celeba --gpus 0 --baseline
+training/train.sh --dataset celeba --gpus 0 --mode baseline
 ```
+
+## Training mode
+
+`--mode repa` (default) trains with representation alignment using the encoder
+configured in the dataset env (`ENC_TYPE`/`PROJ_COEFF`). `--mode baseline`
+(alias: `--baseline`) trains plain SiT with `enc-type=none, proj-coeff=0`. The
+mode is reflected in the auto exp-name (`..._dinov2-vit-b` vs `..._baseline`).
 
 `--dry-run` prints the exact `accelerate` command without launching.
 
@@ -57,6 +64,12 @@ skips it.
 ## AutoDL
 
 If `/etc/network_turbo` exists it is sourced automatically to accelerate
-HuggingFace / torch.hub / GitHub downloads. Set `REPA_ENV_NAME` to pick the
-conda env (default `repa`; created if missing), or `REPA_SKIP_INSTALL=1` /
-`--skip-setup` to skip dependency install.
+HuggingFace / torch.hub / GitHub downloads. HF traffic is routed through
+`HF_ENDPOINT=https://hf-mirror.com` with the Xet backend disabled
+(`HF_HUB_DISABLE_XET=1`) — both are set unconditionally and can be overridden by
+exporting them yourself. By default the pipeline uses the
+machine's **current Python** (AutoDL base env) and just `pip install`s the deps —
+it does **not** create a conda env, since the AutoDL conda mirror often fails
+behind the turbo proxy. To use a conda env anyway, set `REPA_CONDA_ENV=<name>`
+(activated, created only if missing). Use `REPA_SKIP_INSTALL=1` or `--skip-setup`
+to skip dependency install entirely.

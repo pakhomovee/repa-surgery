@@ -19,13 +19,16 @@
 #       --checkpointing-steps N
 #       --max-train-steps N
 #       --exp-name NAME       run name (default: auto from dataset/model/enc)
-#       --baseline            train plain SiT (enc-type=none, proj-coeff=0)
+#       --mode MODE           "repa" (encoder alignment, default) or "baseline"
+#                             (plain SiT: enc-type=none, proj-coeff=0)
+#       --baseline            shortcut for --mode baseline
 #       --prepare             run dataset prep before training
 #       --skip-setup          skip env + dependency setup
 #       --dry-run             print the launch command and exit
 #   --                        pass everything after this verbatim to train.py
 #
-# Env vars: REPA_ENV_NAME (conda env, default "repa"), REPA_SKIP_INSTALL=1,
+# Env vars: REPA_CONDA_ENV (opt-in conda env; default: use current python),
+#           REPA_SKIP_INSTALL=1 (skip pip install),
 #           MAIN_PROCESS_PORT (default 29521), WANDB_MODE (default offline).
 set -euo pipefail
 
@@ -42,7 +45,7 @@ NUM_WORKERS=""
 CHECKPOINTING_STEPS=""
 MAX_TRAIN_STEPS=""
 EXP_NAME=""
-BASELINE=0
+MODE="repa"
 DO_PREPARE=0
 SKIP_SETUP=0
 DRY_RUN=0
@@ -59,7 +62,8 @@ while [[ $# -gt 0 ]]; do
     --checkpointing-steps)   CHECKPOINTING_STEPS="$2"; shift 2 ;;
     --max-train-steps)       MAX_TRAIN_STEPS="$2"; shift 2 ;;
     --exp-name)              EXP_NAME="$2"; shift 2 ;;
-    --baseline)              BASELINE=1; shift ;;
+    --mode)                  MODE="$2"; shift 2 ;;
+    --baseline)              MODE="baseline"; shift ;;
     --prepare)               DO_PREPARE=1; shift ;;
     --skip-setup)            SKIP_SETUP=1; shift ;;
     --dry-run)               DRY_RUN=1; shift ;;
@@ -73,7 +77,14 @@ done
 ENV_FILE="$SCRIPT_DIR/envs/${DATASET}.env"
 [[ -f "$ENV_FILE" ]] || die "No env file: $ENV_FILE"
 
+case "$MODE" in
+  repa|baseline) ;;
+  *) die "Invalid --mode '$MODE' (expected 'repa' or 'baseline')" ;;
+esac
+
 # ---- Environment setup -----------------------------------------------------
+# HF env vars are set unconditionally (they only affect downloads).
+setup_hf_env
 if [[ "$SKIP_SETUP" == "0" ]]; then
   setup_autodl_network
   setup_python_env
@@ -105,8 +116,8 @@ MAX_TRAIN_STEPS="${MAX_TRAIN_STEPS:-$DEFAULT_MAX_TRAIN_STEPS}"
 GPUS="${GPUS:-${CUDA_VISIBLE_DEVICES:-0}}"
 NUM_PROCESSES="$(count_gpus "$GPUS")"
 
-# Baseline => disable encoder alignment.
-if [[ "$BASELINE" == "1" ]]; then
+# baseline mode => disable encoder alignment; repa mode keeps the env's enc.
+if [[ "$MODE" == "baseline" ]]; then
   ENC_TYPE="none"
   PROJ_COEFF=0.0
 fi
