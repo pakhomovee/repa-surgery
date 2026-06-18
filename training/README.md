@@ -78,6 +78,30 @@ projectors, repa does) without extra flags. Uses EMA weights by default
 (`--weights model` for the raw model); labels are spread evenly across classes
 (`--random-labels` to randomize); `--mode sde` switches euler→euler-maruyama.
 
+## Evaluating checkpoints (KID)
+
+[`evaluate.py`](evaluate.py) sweeps every checkpoint in a run and scores it with
+**KID** (Kernel Inception Distance — unbiased and stable with far fewer samples
+than FID, so a full sweep is cheap). Real Inception features are computed once
+and cached; each checkpoint then generates samples and is scored against them.
+Generation + feature extraction are **sharded across `--gpus`**, and all features
+are cached, so re-runs (e.g. after new checkpoints land) only do missing work.
+
+```bash
+python training/evaluate.py \
+  --run-dir ../runs/celeba_sit-b_2_baseline \
+  --gpus 0,1 --num-samples 10000 --num-real 10000
+# -> ../runs/.../eval/kid.csv  + kid_curve.png  + a printed step->KID table
+```
+
+KID uses the canonical FID InceptionV3 (`pytorch-fid`) and the standard cubic
+polynomial-kernel MMD² estimator (subset-averaged, as in torch-fidelity /
+torchmetrics); lower is better and the run prints the best step. Knobs:
+`--num-samples`/`--num-real` (10k is plenty for KID; drop to 5k for speed),
+`--every N` (evaluate every Nth checkpoint), `--ckpt` for a single one,
+`--cfg-scale`, `--num-steps`, `--weights {ema,model}`. The FID Inception weights
+download on first use (`network_turbo` on AutoDL handles it).
+
 ## Checking for memorization
 
 [`memorization.py`](memorization.py) checks whether a checkpoint copies training
