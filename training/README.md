@@ -43,9 +43,11 @@ Mode knobs live in the dataset env: `HASTE_END_STEP` (haste) and
 
 Implementation note: `haste` and `repa-sigma` are backed by new `train.py`
 flags (`--alignment-end-step`, `--grad-surgery`/`--grad-ema-decay`). `repa-sigma`
-computes the two gradients with `torch.autograd.grad` (one shared forward),
-all-reduces them manually across ranks (bypassing DDP), then assembles `.grad`
-— so it needs `--gradient-accumulation-steps=1`.
+gets `g_diff` from a normal DDP backward (so its all-reduce overlaps with the
+backward) and `g_repa` from `torch.autograd.grad` over the partial alignment
+graph (only that subset is all-reduced), then assembles `.grad` with fused
+`_foreach` ops — so it needs `--gradient-accumulation-steps=1`. It runs ~1.2×
+the cost of plain `repa` (the irreducible extra is the second, partial backward).
 
 `--dry-run` prints the exact `accelerate` command without launching.
 

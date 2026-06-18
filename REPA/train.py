@@ -343,47 +343,51 @@ def main(args):
                 proj_coeff = 0.0
 
             if args.grad_surgery:
-                # REPA-sigma: PCGrad-style surgery between diffusion and
-                # alignment gradients (no accelerator.accumulate / DDP reducer).
+                # REPA-sigma: PCGrad-style surgery between the diffusion gradient
+                # (g_diff) and the alignment gradient (g_repa), using an EMA of
+                # g_diff as the stable reference direction.
                 model_kwargs = dict(y=labels)
-                with accelerator.no_sync(model):
-                    loss, proj_loss = loss_fn(model, x, model_kwargs, zs=zs)
-                    loss_mean = loss.mean()
-                    proj_loss_mean = proj_loss.mean()
-                    params = [p for p in model.parameters() if p.requires_grad]
-                    # Local per-parameter grads of each term (one shared forward).
-                    g_diff = torch.autograd.grad(
-                        loss_mean, params, retain_graph=True, allow_unused=True)
-                    g_repa = torch.autograd.grad(
-                        proj_loss_mean * proj_coeff, params, allow_unused=True)
-                g_diff = [g if g is not None else torch.zeros_like(p)
-                          for g, p in zip(g_diff, params)]
-                g_repa = [g if g is not None else torch.zeros_like(p)
-                          for g, p in zip(g_repa, params)]
-                # We bypassed DDP, so average grads across ranks manually.
-                if accelerator.num_processes > 1:
-                    g_diff = _allreduce_mean(g_diff, accelerator.num_processes)
-                    g_repa = _allreduce_mean(g_repa, accelerator.num_processes)
+                loss, proj_loss = loss_fn(model, x, model_kwargs, zs=zs)
+                loss_mean = loss.mean()
+                proj_loss_mean = proj_loss.mean()
+                params = [p for p in model.parameters() if p.requires_grad]
 
-                # EMA of the diffusion gradient = stable reference direction.
+                # g_diff via the normal DDP backward, so its all-reduce overlaps
+                # with the backward pass (the expensive bit). The 0 * proj term
+                # keeps the projector params in the autograd graph so DDP does
+                # not flag them as unused. g_diff lands (synced) in .grad.
+                accelerator.backward(loss_mean + 0.0 * proj_loss_mean, retain_graph=True)
+
+                # EMA of the synced diffusion gradient now sitting in .grad.
+                grads = [p.grad for p in params]
                 if grad_ema is None:
-                    grad_ema = [g.detach().clone() for g in g_diff]
+                    grad_ema = [g.detach().clone() for g in grads]
                 else:
-                    for e, g in zip(grad_ema, g_diff):
-                        e.mul_(args.grad_ema_decay).add_(g, alpha=1 - args.grad_ema_decay)
+                    torch._foreach_mul_(grad_ema, args.grad_ema_decay)
+                    torch._foreach_add_(grad_ema, grads, alpha=1 - args.grad_ema_decay)
 
-                # PCGrad: if alignment grad conflicts with the (EMA) diffusion
-                # direction, project out the anticorrelated component.
-                dot = sum((gr * e).sum() for gr, e in zip(g_repa, grad_ema)).item()
-                if dot < 0:
-                    ema_sq = sum((e * e).sum() for e in grad_ema).item() + 1e-12
-                    scale = dot / ema_sq  # python float; identical across ranks
-                    for gr, e in zip(g_repa, grad_ema):
-                        gr.add_(e, alpha=-scale)
+                # g_repa via autograd over the (partial) alignment graph -- only
+                # the encoder-depth blocks + projectors get a gradient. Local, so
+                # all-reduce just that subset (much smaller than the full model).
+                g_repa = torch.autograd.grad(
+                    proj_loss_mean * proj_coeff, params, allow_unused=True)
+                idx = [i for i, g in enumerate(g_repa) if g is not None]
+                repa_grads = [g_repa[i] for i in idx]
+                if accelerator.num_processes > 1 and repa_grads:
+                    repa_grads = _allreduce_mean(repa_grads, accelerator.num_processes)
 
-                # Combined update direction.
-                for p, gd, gr in zip(params, g_diff, g_repa):
-                    p.grad = gd + gr
+                # PCGrad: project out the part of g_repa that conflicts with the
+                # EMA diffusion direction (only when the dot product is negative).
+                # clamp(dot, max=0) => scale is 0 when there is no conflict, which
+                # avoids a second device sync / branch.
+                if repa_grads:
+                    dot = sum((g * grad_ema[i]).sum() for g, i in zip(repa_grads, idx))
+                    ema_sq = torch.stack(torch._foreach_norm(grad_ema)).pow(2).sum() + 1e-12
+                    scale = (torch.clamp(dot, max=0.0) / ema_sq).item()
+                    # grad <- g_diff - scale * g_ema (+ g_repa on its subset)
+                    torch._foreach_add_(grads, grad_ema, alpha=-scale)
+                    torch._foreach_add_([grads[i] for i in idx], repa_grads)
+
                 grad_norm = accelerator.clip_grad_norm_(params, args.max_grad_norm)
                 optimizer.step()
                 optimizer.zero_grad(set_to_none=True)
