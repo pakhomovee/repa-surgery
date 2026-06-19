@@ -15,18 +15,36 @@ except ImportError:
 
 
 class CustomDataset(Dataset):
-    def __init__(self, data_dir, load_raw=True):
+    def __init__(self, data_dir, load_raw=True, repr_dir=None):
         # load_raw=False skips reading the raw image entirely (returns an empty
         # placeholder). Use it when no encoder is active (baseline): the model
         # trains on VAE latents only, so loading/decoding raw images is wasted
         # I/O -- which dominates wall-clock for datasets stored as large
         # uncompressed PNGs (e.g. ImageNet).
+        #
+        # repr_dir (e.g. <data>/repr-dinov2-vit-b): if set, the first returned
+        # element is the PRECOMPUTED encoder representation for that image instead
+        # of the raw pixels -- so REPA training skips both the raw-image read and
+        # the per-step encoder forward. Implies load_raw=False.
         PIL.Image.init()
         supported_ext = PIL.Image.EXTENSION.keys() | {'.npy'}
 
+        self.repr_dir = repr_dir
+        if repr_dir is not None:
+            load_raw = False
         self.load_raw = load_raw
         self.images_dir = os.path.join(data_dir, 'images')
         self.features_dir = os.path.join(data_dir, 'vae-sd')
+
+        # precomputed representations (sorted -> zipped by index with features)
+        if repr_dir is not None:
+            self._repr_fnames = {
+                os.path.relpath(os.path.join(root, fname), start=repr_dir)
+                for root, _dirs, files in os.walk(repr_dir) for fname in files
+                }
+            self.repr_fnames = sorted(
+                fname for fname in self._repr_fnames if self._file_ext(fname) == '.npy'
+                )
 
         # images
         if load_raw:
@@ -64,12 +82,20 @@ class CustomDataset(Dataset):
         if self.load_raw:
             assert len(self.image_fnames) == len(self.feature_fnames), \
                 "Number of feature files and label files should be same"
+        if self.repr_dir is not None:
+            assert len(self.repr_fnames) == len(self.feature_fnames), \
+                "Number of representation files and feature files should be same"
         return len(self.feature_fnames)
 
     def __getitem__(self, idx):
         feature_fname = self.feature_fnames[idx]
         features = np.load(os.path.join(self.features_dir, feature_fname))
         label = torch.tensor(self.labels[idx])
+
+        if self.repr_dir is not None:
+            # Precomputed encoder representation in place of the raw image.
+            rep = np.load(os.path.join(self.repr_dir, self.repr_fnames[idx]))
+            return torch.from_numpy(rep), torch.from_numpy(features), label
 
         if not self.load_raw:
             # Empty placeholder; the model never consumes it without an encoder.

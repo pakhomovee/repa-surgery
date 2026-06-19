@@ -181,16 +181,28 @@ def main(args):
     assert args.resolution % 8 == 0, "Image size must be divisible by 8 (for the VAE encoder)."
     latent_size = args.resolution // 8
 
-    # "none"/"None"/None disables representation alignment (plain SiT baseline).
-    if args.enc_type not in (None, "None", "none"):
+    # Representation-alignment target source, in priority order:
+    #   1. --repr-dir: precomputed encoder features (no encoder loaded here; the
+    #      per-step encoder forward + raw-image read are skipped entirely).
+    #   2. --enc-type != none: load the encoder, compute features on the fly.
+    #   3. baseline: no alignment, no projectors.
+    use_repr = args.repr_dir is not None
+    if use_repr:
+        with open(os.path.join(args.repr_dir, "meta.json")) as f:
+            repr_meta = json.load(f)
+        encoders, encoder_types, architectures = [], [], []
+        z_dims = [repr_meta["dim"]]
+    elif args.enc_type not in (None, "None", "none"):
         encoders, encoder_types, architectures = load_encoders(
             args.enc_type, device, args.resolution
             )
+        z_dims = [encoder.embed_dim for encoder in encoders]
     else:
+        # No encoders => no projectors at all (empty list). This avoids DDP
+        # "parameter did not receive grad" errors from unused projector weights.
         encoders, encoder_types, architectures = [], [], []
-    # No encoders => no projectors at all (empty list). This avoids DDP
-    # "parameter did not receive grad" errors from unused projector weights.
-    z_dims = [encoder.embed_dim for encoder in encoders] if len(encoders) > 0 else []
+        z_dims = []
+    alignment_enabled = use_repr or len(encoders) > 0
     block_kwargs = {"fused_attn": args.fused_attn, "qk_norm": args.qk_norm}
     model = SiT_models[args.model](
         input_size=latent_size,
@@ -239,27 +251,36 @@ def main(args):
         eps=args.adam_epsilon,
     )    
     
-    # Setup data:
-    # Skip loading raw images when there is no encoder (baseline): they would be
-    # unused, and decoding them dominates wall-clock for large-PNG datasets.
-    train_dataset = CustomDataset(args.data_dir, load_raw=len(encoders) > 0)
+    # Setup data. The dataloader is (re)built "by kind" so we can drop the
+    # encoder inputs when alignment is off:
+    #   align_repr -> precomputed features in the image slot (use_repr)
+    #   align_raw  -> raw images (on-the-fly encoder)
+    #   plain      -> latents only (baseline, or HASTE after termination)
     local_batch_size = int(args.batch_size // accelerator.num_processes)
-    train_dataloader = DataLoader(
-        train_dataset,
-        batch_size=local_batch_size,
-        shuffle=True,
-        num_workers=args.num_workers,
-        pin_memory=True,
-        drop_last=True
-    )
-    if accelerator.is_main_process:
-        logger.info(f"Dataset contains {len(train_dataset):,} images ({args.data_dir})")
-    
+
+    def make_dataloader(kind):
+        if kind == "align_repr":
+            ds = CustomDataset(args.data_dir, repr_dir=args.repr_dir)
+        elif kind == "align_raw":
+            ds = CustomDataset(args.data_dir, load_raw=True)
+        else:  # plain
+            ds = CustomDataset(args.data_dir, load_raw=False)
+        dl = DataLoader(ds, batch_size=local_batch_size, shuffle=True,
+                        num_workers=args.num_workers, pin_memory=True, drop_last=True)
+        return accelerator.prepare(dl), len(ds)
+
+    def loader_kind(step):
+        active = alignment_enabled and (
+            args.alignment_end_step < 0 or step < args.alignment_end_step)
+        if not active:
+            return "plain"
+        return "align_repr" if use_repr else "align_raw"
+
     # Prepare models for training:
     update_ema(ema, model, decay=0)  # Ensure EMA is initialized with synced weights
     model.train()  # important! This enables embedding dropout for classifier-free guidance
     ema.eval()  # EMA model should always be in eval mode
-    
+
     # resume:
     global_step = 0
     if args.resume_step > 0:
@@ -273,9 +294,12 @@ def main(args):
         optimizer.load_state_dict(ckpt['opt'])
         global_step = ckpt['steps']
 
-    model, optimizer, train_dataloader = accelerator.prepare(
-        model, optimizer, train_dataloader
-    )
+    model, optimizer = accelerator.prepare(model, optimizer)
+    current_kind = loader_kind(global_step)
+    train_dataloader, dataset_len = make_dataloader(current_kind)
+    if accelerator.is_main_process:
+        logger.info(f"Dataset contains {dataset_len:,} samples ({args.data_dir}); "
+                    f"dataloader kind: {current_kind}")
 
     if accelerator.is_main_process:
         tracker_config = vars(copy.deepcopy(args))
@@ -297,9 +321,9 @@ def main(args):
 
     # Labels to condition the model with (feel free to change):
     sample_batch_size = 64 // accelerator.num_processes
-    gt_raw_images, gt_xs, _ = next(iter(train_dataloader))
-    if len(encoders) > 0:
-        assert gt_raw_images.shape[-1] == args.resolution
+    _first, gt_xs, _ = next(iter(train_dataloader))
+    if current_kind == "align_raw":
+        assert _first.shape[-1] == args.resolution
     gt_xs = gt_xs[:sample_batch_size]
     gt_xs = sample_posterior(
         gt_xs.to(device), latents_scale=latents_scale, latents_bias=latents_bias
@@ -315,15 +339,22 @@ def main(args):
     grad_ema = None
 
     for epoch in range(args.epochs):
+        # Switch the dataloader when alignment turns off (HASTE termination), so
+        # the post-termination phase stops loading encoder inputs entirely.
+        kind = loader_kind(global_step)
+        if kind != current_kind:
+            if accelerator.is_main_process:
+                logger.info(f"step {global_step}: dataloader '{current_kind}' -> '{kind}'")
+            train_dataloader, _ = make_dataloader(kind)
+            current_kind = kind
+        align_now = kind != "plain"
         model.train()
-        for raw_image, x, y in train_dataloader:
-            raw_image = raw_image.to(device)
+        for first, x, y in train_dataloader:
             x = x.squeeze(dim=1).to(device)
             y = y.to(device)
-            z = None
             if args.legacy:
-                # In our early experiments, we accidentally apply label dropping twice: 
-                # once in train.py and once in sit.py. 
+                # In our early experiments, we accidentally apply label dropping twice:
+                # once in train.py and once in sit.py.
                 # We keep this option for exact reproducibility with previous runs.
                 drop_ids = torch.rand(y.shape[0], device=y.device) < args.cfg_prob
                 labels = torch.where(drop_ids, args.num_classes, y)
@@ -332,13 +363,18 @@ def main(args):
             with torch.no_grad():
                 x = sample_posterior(x, latents_scale=latents_scale, latents_bias=latents_bias)
                 zs = []
-                with accelerator.autocast():
-                    for encoder, encoder_type, arch in zip(encoders, encoder_types, architectures):
-                        raw_image_ = preprocess_raw_image(raw_image, encoder_type)
-                        z = encoder.forward_features(raw_image_)
-                        if 'mocov3' in encoder_type: z = z = z[:, 1:] 
-                        if 'dinov2' in encoder_type: z = z['x_norm_patchtokens']
-                        zs.append(z)
+                if align_now and use_repr:
+                    # Precomputed encoder features (already (B, T, D)).
+                    zs = [first.to(device)]
+                elif align_now:
+                    raw_image = first.to(device)
+                    with accelerator.autocast():
+                        for encoder, encoder_type, arch in zip(encoders, encoder_types, architectures):
+                            raw_image_ = preprocess_raw_image(raw_image, encoder_type)
+                            z = encoder.forward_features(raw_image_)
+                            if 'mocov3' in encoder_type: z = z[:, 1:]
+                            if 'dinov2' in encoder_type: z = z['x_norm_patchtokens']
+                            zs.append(z)
 
             # HASTE: disable the alignment loss after the termination step.
             proj_coeff = args.proj_coeff
@@ -527,6 +563,10 @@ def parse_args(input_args=None):
     parser.add_argument("--prediction", type=str, default="v", choices=["v"]) # currently we only support v-prediction
     parser.add_argument("--cfg-prob", type=float, default=0.1)
     parser.add_argument("--enc-type", type=str, default='dinov2-vit-b')
+    # Precomputed encoder representations (datasets/encode_repr.py). When set, the
+    # encoder is not loaded and per-step encoder forwards + raw-image reads are
+    # skipped; the stored features are used as the alignment targets.
+    parser.add_argument("--repr-dir", type=str, default=None)
     parser.add_argument("--proj-coeff", type=float, default=0.5)
     parser.add_argument("--weighting", default="uniform", type=str, help="Max gradient norm.")
     parser.add_argument("--legacy", action=argparse.BooleanOptionalAction, default=False)

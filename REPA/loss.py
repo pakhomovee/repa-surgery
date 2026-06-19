@@ -88,7 +88,13 @@ class SILoss:
                 z_tilde = torch.nn.functional.normalize(z_tilde, dim=-1)
                 proj_loss = proj_loss - (z * z_tilde).sum(dim=-1).mean()  # mean over B, T
             proj_loss = proj_loss / len(zs)
+        elif len(zs_tilde) > 0:
+            # No targets but projectors exist (HASTE after termination): keep the
+            # projector params in the graph with a zero-valued term so DDP does
+            # not flag them as unused. Contributes nothing to the gradient.
+            proj_loss = 0.0 * sum(z_tilde.float().sum() for z_tilde in zs_tilde)
         else:
+            # Baseline: no projectors at all.
             proj_loss = torch.zeros((), device=images.device)
 
         return denoising_loss, proj_loss

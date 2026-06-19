@@ -101,6 +101,13 @@ log "Loading dataset env: $ENV_FILE"
 # shellcheck disable=SC1090
 source "$ENV_FILE"
 
+# Capture the dataset's encoder + precomputed-representation paths *before* any
+# baseline override of ENC_TYPE. REPR_DIR is REPA-relative (passed to train.py);
+# REPR_PATH is absolute (existence checks / precompute source).
+REPR_ENC="$ENC_TYPE"
+REPR_DIR="${DATA_DIR}/repr-${REPR_ENC}"
+REPR_PATH="${REPO_ROOT}/data/$(basename "$DATA_DIR")/repr-${REPR_ENC}"
+
 # Resolve GPUs early so dataset prep (multi-GPU VAE encode) can use them.
 GPUS="${GPUS:-${CUDA_VISIBLE_DEVICES:-0}}"
 NUM_PROCESSES="$(count_gpus "$GPUS")"
@@ -114,6 +121,21 @@ if [[ "$DO_PREPARE" == "1" ]]; then
   else
     warn "Env '$DATASET' defines no prepare_dataset(); skipping prep"
   fi
+fi
+
+# ---- Optional: precompute encoder representations (opt-in; ~50-80 GB) -------
+# Removes the per-step encoder forward + raw-image read from repa/haste/repa-sigma.
+# Once present, training auto-uses it (see --repr-dir wiring below).
+if [[ "${PRECOMPUTE_REPR:-0}" == "1" && "$MODE" != "baseline" && ! -f "${REPR_PATH}/meta.json" ]]; then
+  log "Precomputing ${REPR_ENC} representations -> ${REPR_PATH}"
+  python "${REPO_ROOT}/datasets/encode_repr.py" \
+    --source "${REPO_ROOT}/data/$(basename "$DATA_DIR")/images" \
+    --dest "${REPR_PATH}" \
+    --enc-type "${REPR_ENC}" \
+    --resolution "${RESOLUTION}" \
+    --gpus "${GPUS}" \
+    --batch-size "${ENCODE_BATCH_SIZE:-64}" \
+    --num-workers "${ENCODE_NUM_WORKERS:-8}"
 fi
 
 # ---- Resolve effective settings (CLI > env default) ------------------------
@@ -140,6 +162,13 @@ case "$MODE" in
     PRECISION="bf16"
     MODE_ARGS+=("--grad-surgery" "--grad-ema-decay=${GRAD_EMA_DECAY:-0.99}") ;;
 esac
+
+# Auto-use precomputed encoder representations for alignment modes when present
+# (set NO_REPR=1 to force the on-the-fly encoder instead).
+if [[ "$MODE" != "baseline" && "${NO_REPR:-0}" != "1" && -f "${REPR_PATH}/meta.json" ]]; then
+  MODE_ARGS+=("--repr-dir=${REPR_DIR}")
+  log "using precomputed representations: ${REPR_PATH}"
+fi
 
 # Auto exp-name, e.g. celeba_sit-b_2_repa  /  celeba_sit-b_2_haste
 if [[ -z "$EXP_NAME" ]]; then

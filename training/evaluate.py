@@ -80,18 +80,22 @@ def generate_images(model, vae, targs, n, cfg_scale, num_steps, gen_batch, devic
     g = torch.Generator(device=device).manual_seed(seed)
     latent_size = targs.resolution // 8
     scale = torch.tensor([0.18215] * 4, device=device).view(1, 4, 1, 1)
+    # Sampling runs the model in half precision (like training); without this it
+    # falls back to fp32, which is several times slower (esp. on T4/A100).
+    amp_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
     out = []
     for i in tqdm(range(0, n, gen_batch)):
         b = min(gen_batch, n - i)
         y = (torch.arange(i, i + b, device=device) % targs.num_classes)
         xT = torch.randn((b, 4, latent_size, latent_size), device=device, generator=g)
-        lat = euler_sampler(
-            model, xT, y, num_steps=num_steps, cfg_scale=cfg_scale,
-            guidance_low=0.0, guidance_high=1.0, path_type=targs.path_type,
-            num_classes=targs.num_classes,
-        ).to(torch.float32)
-        img = vae.decode(lat / scale).sample
-        out.append(((img + 1) / 2).clamp(0, 1).cpu())
+        with torch.autocast("cuda", dtype=amp_dtype):
+            lat = euler_sampler(
+                model, xT, y, num_steps=num_steps, cfg_scale=cfg_scale,
+                guidance_low=0.0, guidance_high=1.0, path_type=targs.path_type,
+                num_classes=targs.num_classes,
+            ).to(torch.float32)
+            img = vae.decode(lat / scale).sample
+        out.append(((img.float() + 1) / 2).clamp(0, 1).cpu())
     return torch.cat(out)
 
 
@@ -173,6 +177,8 @@ def list_real(images_dir: Path, num_real: int | None) -> list[Path]:
 def worker(rank, gpu_ids, ckpts, real_files, args, eval_dir):
     device = torch.device(f"cuda:{gpu_ids[rank]}")
     torch.cuda.set_device(device)
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
     world = len(gpu_ids)
     inception = build_inception(device)
 
@@ -219,7 +225,8 @@ def main() -> None:
     p.add_argument("--every", type=int, default=1, help="Evaluate every Nth checkpoint.")
     p.add_argument("--data-dir", type=Path, default=None, help="Real data dir (default: from ckpt).")
     p.add_argument("--batch-size", type=int, default=128, help="Inception batch size.")
-    p.add_argument("--gen-batch", type=int, default=64, help="Generation batch size.")
+    p.add_argument("--gen-batch", type=int, default=128,
+                   help="Generation batch size (doubled internally when cfg-scale>1).")
     p.add_argument("--num-workers", type=int, default=8)
     p.add_argument("--kid-subset-size", type=int, default=1000)
     p.add_argument("--kid-subsets", type=int, default=100)

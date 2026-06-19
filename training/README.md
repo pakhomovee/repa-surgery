@@ -130,14 +130,31 @@ face/scene set), copy [`envs/celeba.env`](envs/celeba.env), adjust the values,
 and implement `prepare_dataset()`. [`envs/imagenet.env`](envs/imagenet.env) is a
 ready template for the ImageNet path.
 
-## Why no precomputed DINOv2 features
+## Speeding up the REPA modes (precomputed features)
 
-The dataset only stores **raw images** + **VAE latents**. REPA applies the
-representation encoder (`--enc-type=dinov2-vit-b`) *on-the-fly during training*
-(`load_encoders` + `preprocess_raw_image` over the raw uint8 images), so the
-encoder choice stays a training-time knob. Precomputing DINOv2 would freeze
-`enc-type` into the dataset and save little, so the export step deliberately
-skips it.
+By default REPA applies the encoder (`--enc-type=dinov2-vit-b`) **on the fly**:
+every step loads the raw image and runs DINOv2 to get the alignment target. The
+target is the encoder's view of the *clean* image (the diffusion noise only goes
+into the DiT input), so it's identical every epoch — i.e. precomputable.
+
+[`datasets/encode_repr.py`](../datasets/encode_repr.py) precomputes those
+features once (multi-GPU), and training then loads them instead of running the
+encoder — removing **both** the per-step encoder forward and the raw-image read
+from `repa` / `haste` / `repa-sigma` (≈ baseline-speed training). It's exact
+(fp16 rounding aside), since it reuses REPA's own `load_encoders` + preprocessing.
+
+Opt-in (it costs disk: DINOv2-B is ~393 KB/image fp16 → ~51 GB for IN100, ~80 GB
+for CelebA):
+
+```bash
+# precompute once (then every non-baseline run auto-uses it):
+PRECOMPUTE_REPR=1 training/train.sh -d imagenet100 --gpus 0,1 --mode repa ...
+```
+
+When `<data>/repr-<enc>/meta.json` exists, train.sh auto-passes `--repr-dir`;
+set `NO_REPR=1` to force the on-the-fly encoder. **HASTE** drops the alignment
+loss at its termination step and then switches to a features-less dataloader, so
+its long post-termination phase loads neither images nor features.
 
 ## AutoDL
 
