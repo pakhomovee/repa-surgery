@@ -81,7 +81,7 @@ def generate_images(model, vae, targs, n, cfg_scale, num_steps, gen_batch, devic
     latent_size = targs.resolution // 8
     scale = torch.tensor([0.18215] * 4, device=device).view(1, 4, 1, 1)
     out = []
-    for i in range(0, n, gen_batch):
+    for i in tqdm(range(0, n, gen_batch)):
         b = min(gen_batch, n - i)
         y = (torch.arange(i, i + b, device=device) % targs.num_classes)
         xT = torch.randn((b, 4, latent_size, latent_size), device=device, generator=g)
