@@ -240,7 +240,9 @@ def main(args):
     )    
     
     # Setup data:
-    train_dataset = CustomDataset(args.data_dir)
+    # Skip loading raw images when there is no encoder (baseline): they would be
+    # unused, and decoding them dominates wall-clock for large-PNG datasets.
+    train_dataset = CustomDataset(args.data_dir, load_raw=len(encoders) > 0)
     local_batch_size = int(args.batch_size // accelerator.num_processes)
     train_dataloader = DataLoader(
         train_dataset,
@@ -296,7 +298,8 @@ def main(args):
     # Labels to condition the model with (feel free to change):
     sample_batch_size = 64 // accelerator.num_processes
     gt_raw_images, gt_xs, _ = next(iter(train_dataloader))
-    assert gt_raw_images.shape[-1] == args.resolution
+    if len(encoders) > 0:
+        assert gt_raw_images.shape[-1] == args.resolution
     gt_xs = gt_xs[:sample_batch_size]
     gt_xs = sample_posterior(
         gt_xs.to(device), latents_scale=latents_scale, latents_bias=latents_bias
