@@ -163,6 +163,28 @@ def compute_kid(real, fake, subset_size, num_subsets, seed, device):
     return vals.mean().item(), vals.std().item()
 
 
+def compute_fid(real, fake):
+    """Frechet Inception Distance from the same cached Inception features.
+
+    Standard FID = ||mu_r - mu_f||^2 + Tr(C_r + C_f - 2 (C_r C_f)^0.5)
+    (pytorch-fid's estimator; uses all samples, no subsetting).
+    """
+    import numpy as np
+    from scipy import linalg
+    r = real.double().cpu().numpy()
+    f = fake.double().cpu().numpy()
+    mu1, mu2 = r.mean(0), f.mean(0)
+    s1, s2 = np.cov(r, rowvar=False), np.cov(f, rowvar=False)
+    diff = mu1 - mu2
+    covmean, _ = linalg.sqrtm(s1 @ s2, disp=False)
+    if not np.isfinite(covmean).all():  # numerical guard
+        off = np.eye(s1.shape[0]) * 1e-6
+        covmean = linalg.sqrtm((s1 + off) @ (s2 + off))
+    if np.iscomplexobj(covmean):
+        covmean = covmean.real
+    return float(diff @ diff + np.trace(s1) + np.trace(s2) - 2 * np.trace(covmean))
+
+
 # --------------------------------------------------------------------------- #
 def step_of(ckpt: Path) -> int:
     return int(ckpt.stem)
@@ -273,7 +295,7 @@ def main() -> None:
     device = torch.device(f"cuda:{gpu_ids[0]}")
     real = torch.cat([torch.load(eval_dir / f"real_rank{r}.pt") for r in range(len(gpu_ids))])
     rows = []
-    print("\n=== KID x10^3 (lower is better; ± = standard error = std/sqrt(subsets)) ===")
+    print("\n=== KID x10^3 (± SE = std/sqrt(subsets))  +  FID  (lower is better) ===")
     for ck in ckpts:
         step = step_of(ck)
         fake = torch.cat([torch.load(eval_dir / f"fake_{step:07d}_rank{r}.pt")
@@ -284,35 +306,41 @@ def main() -> None:
         # uncertainty is std/sqrt(subsets) -- NOT the raw subset std (which is the
         # spread of individual noisy 1000-sample subsets, ~10x larger).
         se = std / (args.kid_subsets ** 0.5)
-        rows.append((step, mean, std, se))
-        print(f"  step {step:>8}: KID x10^3 = {mean * 1e3:7.3f} ± {se * 1e3:.3f}")
+        # FID reuses the same cached Inception features (no regeneration).
+        fid = compute_fid(real, fake)
+        rows.append((step, mean, std, se, fid))
+        print(f"  step {step:>8}: KID x10^3 = {mean * 1e3:7.3f} ± {se * 1e3:.3f}   "
+              f"FID = {fid:7.3f}")
 
     out = args.output or (eval_dir / "kid.csv")
     with open(out, "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["step", "kid_mean", "kid_std", "kid_se", "kid_x1e3", "kid_se_x1e3"])
-        for step, mean, std, se in rows:
-            w.writerow([step, mean, std, se, mean * 1e3, se * 1e3])
+        w.writerow(["step", "kid_mean", "kid_std", "kid_se", "kid_x1e3", "kid_se_x1e3", "fid"])
+        for step, mean, std, se, fid in rows:
+            w.writerow([step, mean, std, se, mean * 1e3, se * 1e3, fid])
     print(f"\nWrote {out}")
-    best = min(rows, key=lambda r: r[1])
-    print(f"Best: step {best[0]} (KID x10^3 = {best[1] * 1e3:.3f})")
+    best_kid = min(rows, key=lambda r: r[1])
+    best_fid = min(rows, key=lambda r: r[4])
+    print(f"Best KID: step {best_kid[0]} (x10^3 = {best_kid[1] * 1e3:.3f}) | "
+          f"Best FID: step {best_fid[0]} ({best_fid[4]:.3f})")
 
     try:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         steps = [r[0] for r in rows]
-        means = [r[1] * 1e3 for r in rows]
+        kid = [r[1] * 1e3 for r in rows]
         ses = [r[3] * 1e3 for r in rows]
-        plt.figure(figsize=(7, 4))
-        plt.errorbar(steps, means, yerr=ses, marker="o", capsize=3)
-        plt.xlabel("training step")
-        plt.ylabel("KID x10^3")
-        plt.title(f"KID vs step — {run_dir.name}")
-        plt.grid(True, alpha=0.3)
-        plt.tight_layout()
+        fid = [r[4] for r in rows]
+        fig, (a1, a2) = plt.subplots(1, 2, figsize=(11, 4))
+        a1.errorbar(steps, kid, yerr=ses, marker="o", capsize=3, color="#1f77b4")
+        a1.set_xlabel("training step"); a1.set_ylabel("KID x10^3"); a1.grid(True, alpha=0.3)
+        a2.plot(steps, fid, marker="o", color="#d62728")
+        a2.set_xlabel("training step"); a2.set_ylabel("FID"); a2.grid(True, alpha=0.3)
+        fig.suptitle(f"{run_dir.name}")
+        fig.tight_layout()
         curve = eval_dir / "kid_curve.png"
-        plt.savefig(curve, dpi=120)
+        fig.savefig(curve, dpi=120)
         print(f"Wrote {curve}")
     except Exception as e:  # plotting is optional
         print(f"(skipped curve plot: {e})")

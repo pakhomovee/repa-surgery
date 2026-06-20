@@ -78,25 +78,28 @@ projectors, repa does) without extra flags. Uses EMA weights by default
 (`--weights model` for the raw model); labels are spread evenly across classes
 (`--random-labels` to randomize); `--mode sde` switches euler→euler-maruyama.
 
-## Evaluating checkpoints (KID)
+## Evaluating checkpoints (KID + FID)
 
 [`evaluate.py`](evaluate.py) sweeps every checkpoint in a run and scores it with
-**KID** (Kernel Inception Distance — unbiased and stable with far fewer samples
-than FID, so a full sweep is cheap). Real Inception features are computed once
-and cached; each checkpoint then generates samples and is scored against them.
-Generation + feature extraction are **sharded across `--gpus`**, and all features
-are cached, so re-runs (e.g. after new checkpoints land) only do missing work.
+**KID** (Kernel Inception Distance — unbiased, stable with few samples) **and
+FID** (Fréchet, the standard headline metric). Both are computed from the *same*
+cached Inception features, so FID is free. Real features are computed once;
+each checkpoint generates samples and is scored against them. Generation +
+feature extraction are **sharded across `--gpus`** and cached, so re-runs only do
+missing work — including adding FID to an already-evaluated run (no regeneration).
 
 ```bash
 python training/evaluate.py \
   --run-dir ../runs/celeba_sit-b_2_baseline \
-  --gpus 0,1 --num-samples 10000 --num-real 10000
-# -> ../runs/.../eval/kid.csv  + kid_curve.png  + a printed step->KID table
+  --gpus 0,1 --num-samples 25000 --num-real 25000
+# -> ../runs/.../eval/kid.csv (step, kid_mean/se, fid) + kid_curve.png (KID+FID)
 ```
 
-KID uses the canonical FID InceptionV3 (`pytorch-fid`) and the standard cubic
-polynomial-kernel MMD² estimator (subset-averaged, as in torch-fidelity /
-torchmetrics); lower is better and the run prints the best step. Knobs:
+The CSV reports `KID×10³ ± SE` (SE = std/√subsets, the right error bar — *not* the
+raw subset std) and `fid`. KID uses the canonical FID InceptionV3 (`pytorch-fid`)
+and the cubic polynomial-kernel MMD² estimator (subset-averaged, as in
+torch-fidelity / torchmetrics). Compare runs and plot with
+[`results/analysis/analyze_kid.py`](../results/analysis/analyze_kid.py). Knobs:
 `--num-samples`/`--num-real` (10k is plenty for KID; drop to 5k for speed),
 `--every N` (evaluate every Nth checkpoint), `--ckpt` for a single one,
 `--cfg-scale`, `--num-steps`, `--weights {ema,model}`. The FID Inception weights
