@@ -273,36 +273,41 @@ def main() -> None:
     device = torch.device(f"cuda:{gpu_ids[0]}")
     real = torch.cat([torch.load(eval_dir / f"real_rank{r}.pt") for r in range(len(gpu_ids))])
     rows = []
-    print("\n=== KID (lower is better) ===")
+    print("\n=== KID x10^3 (lower is better; ± = standard error = std/sqrt(subsets)) ===")
     for ck in ckpts:
         step = step_of(ck)
         fake = torch.cat([torch.load(eval_dir / f"fake_{step:07d}_rank{r}.pt")
                           for r in range(len(gpu_ids))])
         mean, std = compute_kid(real, fake, args.kid_subset_size, args.kid_subsets,
                                 args.seed, device)
-        rows.append((step, mean, std))
-        print(f"  step {step:>8}: KID = {mean:.6f} ± {std:.6f}")
+        # The reported KID is the MEAN over `kid_subsets` subset estimates, so its
+        # uncertainty is std/sqrt(subsets) -- NOT the raw subset std (which is the
+        # spread of individual noisy 1000-sample subsets, ~10x larger).
+        se = std / (args.kid_subsets ** 0.5)
+        rows.append((step, mean, std, se))
+        print(f"  step {step:>8}: KID x10^3 = {mean * 1e3:7.3f} ± {se * 1e3:.3f}")
 
     out = args.output or (eval_dir / "kid.csv")
     with open(out, "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["step", "kid_mean", "kid_std"])
-        w.writerows(rows)
+        w.writerow(["step", "kid_mean", "kid_std", "kid_se", "kid_x1e3", "kid_se_x1e3"])
+        for step, mean, std, se in rows:
+            w.writerow([step, mean, std, se, mean * 1e3, se * 1e3])
     print(f"\nWrote {out}")
     best = min(rows, key=lambda r: r[1])
-    print(f"Best: step {best[0]} (KID {best[1]:.6f})")
+    print(f"Best: step {best[0]} (KID x10^3 = {best[1] * 1e3:.3f})")
 
     try:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         steps = [r[0] for r in rows]
-        means = [r[1] for r in rows]
-        stds = [r[2] for r in rows]
+        means = [r[1] * 1e3 for r in rows]
+        ses = [r[3] * 1e3 for r in rows]
         plt.figure(figsize=(7, 4))
-        plt.errorbar(steps, means, yerr=stds, marker="o", capsize=3)
+        plt.errorbar(steps, means, yerr=ses, marker="o", capsize=3)
         plt.xlabel("training step")
-        plt.ylabel("KID")
+        plt.ylabel("KID x10^3")
         plt.title(f"KID vs step — {run_dir.name}")
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
