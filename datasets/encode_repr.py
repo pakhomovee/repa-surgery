@@ -4,7 +4,7 @@
 REPA aligns the DiT's noised-input hidden state with the encoder features of the
 *clean* image. Those targets do not depend on the diffusion noise or the training
 step, so they can be computed once and reused -- removing the per-step encoder
-forward (and the raw-image read) from repa / haste / repa-sigma training.
+forward (and the raw-image read) from repa / haste / repa-PCGrad training.
 
 Output mirrors the VAE-latent layout so REPA's CustomDataset can zip by index:
     <dest>/00000/img-repr-00000000.npy   # one (T, D) float16 array per image

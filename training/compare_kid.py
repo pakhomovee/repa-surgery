@@ -12,7 +12,7 @@ Example:
         ../runs/imagenet100_sit-b_2_baseline \
         ../runs/imagenet100_sit-b_2_repa \
         ../runs/imagenet100_sit-b_2_haste \
-        ../runs/imagenet100_sit-b_2_repa-sigma
+        ../runs/imagenet100_sit-b_2_repa-PCGrad
 """
 from __future__ import annotations
 

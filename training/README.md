@@ -36,13 +36,13 @@ training/train.sh --dataset celeba --gpus 0 --mode baseline
 | `repa` (default) | Representation alignment with the env's `ENC_TYPE`/`PROJ_COEFF` (DINOv2, 0.5). |
 | `baseline` (alias `--baseline`) | Plain SiT, `enc-type=none, proj-coeff=0`. |
 | `haste` | REPA alignment until `HASTE_END_STEP` (default 100k), then pure diffusion loss. Implements the "stage-wise termination" of *REPA Works Until It Doesn't* (arXiv 2505.16792). |
-| `repa-sigma` | PCGrad-style gradient surgery: keeps an EMA of the diffusion gradient as a stable reference; when the alignment gradient is anticorrelated with it (`⟨g_ema,g_repa⟩<0`), the conflicting component is projected out before the update. **Forces bf16** (fp16's GradScaler is incompatible with manually-assembled gradients). |
+| `repa-PCGrad` | PCGrad-style gradient surgery: keeps an EMA of the diffusion gradient as a stable reference; when the alignment gradient is anticorrelated with it (`⟨g_ema,g_repa⟩<0`), the conflicting component is projected out before the update. **Forces bf16** (fp16's GradScaler is incompatible with manually-assembled gradients). |
 
 Mode knobs live in the dataset env: `HASTE_END_STEP` (haste) and
-`GRAD_EMA_DECAY` (repa-sigma, default 0.99).
+`GRAD_EMA_DECAY` (repa-PCGrad, default 0.99).
 
-Implementation note: `haste` and `repa-sigma` are backed by new `train.py`
-flags (`--alignment-end-step`, `--grad-surgery`/`--grad-ema-decay`). `repa-sigma`
+Implementation note: `haste` and `repa-PCGrad` are backed by new `train.py`
+flags (`--alignment-end-step`, `--grad-surgery`/`--grad-ema-decay`). `repa-PCGrad`
 gets `g_diff` from a normal DDP backward (so its all-reduce overlaps with the
 backward) and `g_repa` from `torch.autograd.grad` over the partial alignment
 graph (only that subset is all-reduced), then assembles `.grad` with fused
@@ -143,7 +143,7 @@ into the DiT input), so it's identical every epoch — i.e. precomputable.
 [`datasets/encode_repr.py`](../datasets/encode_repr.py) precomputes those
 features once (multi-GPU), and training then loads them instead of running the
 encoder — removing **both** the per-step encoder forward and the raw-image read
-from `repa` / `haste` / `repa-sigma` (≈ baseline-speed training). It's exact
+from `repa` / `haste` / `repa-PCGrad` (≈ baseline-speed training). It's exact
 (fp16 rounding aside), since it reuses REPA's own `load_encoders` + preprocessing.
 
 Opt-in (it costs disk: DINOv2-B is ~393 KB/image fp16 → ~51 GB for IN100, ~80 GB

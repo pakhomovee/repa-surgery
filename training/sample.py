@@ -3,7 +3,7 @@
 
 Single-GPU, writes a PNG grid to disk (handy on headless AutoDL boxes -- scp the
 png and look at it). Works for any --mode the pipeline trained (baseline / repa /
-haste / repa-sigma): the model is rebuilt from the args stored in the checkpoint,
+haste / repa-PCGrad): the model is rebuilt from the args stored in the checkpoint,
 and the projector shapes (z_dims) are inferred from the weights, so baseline
 (no projectors) and repa load alike.
 

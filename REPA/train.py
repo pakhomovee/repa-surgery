@@ -40,7 +40,7 @@ CLIP_DEFAULT_STD = (0.26862954, 0.26130258, 0.27577711)
 def _allreduce_mean(tensors, world_size):
     """Average a list of per-parameter gradient tensors across DDP ranks.
 
-    Used by REPA-sigma, which computes gradients via torch.autograd.grad and
+    Used by REPA-PCGrad, which computes gradients via torch.autograd.grad and
     therefore bypasses DDP's automatic reduction. Flattens into a single
     buffer so the whole list is reduced in one all-reduce.
     """
@@ -152,7 +152,7 @@ def main(args):
         # and the simple per-step surgery below assumes no grad accumulation.
         if args.mixed_precision == "fp16":
             raise ValueError(
-                "--grad-surgery (REPA-sigma) requires --mixed-precision=bf16 (or no); "
+                "--grad-surgery (REPA-PCGrad) requires --mixed-precision=bf16 (or no); "
                 "fp16 uses a GradScaler that conflicts with manual gradients."
             )
         if args.gradient_accumulation_steps != 1:
@@ -334,7 +334,7 @@ def main(args):
     n = ys.size(0)
     xT = torch.randn((n, 4, latent_size, latent_size), device=device)
 
-    # REPA-sigma: running EMA of the (synced) diffusion gradient, kept as a
+    # REPA-PCGrad: running EMA of the (synced) diffusion gradient, kept as a
     # list of per-parameter tensors. Lazily initialized on the first step.
     grad_ema = None
 
@@ -382,7 +382,7 @@ def main(args):
                 proj_coeff = 0.0
 
             if args.grad_surgery:
-                # REPA-sigma: PCGrad-style surgery between the diffusion gradient
+                # REPA-PCGrad: PCGrad-style surgery between the diffusion gradient
                 # (g_diff) and the alignment gradient (g_repa), using an EMA of
                 # g_diff as the stable reference direction.
                 model_kwargs = dict(y=labels)
@@ -576,7 +576,7 @@ def parse_args(input_args=None):
     # and training continues on the pure denoising loss. -1 => never (plain REPA).
     parser.add_argument("--alignment-end-step", type=int, default=-1)
 
-    # REPA-sigma: PCGrad-style gradient surgery between the diffusion and
+    # REPA-PCGrad: PCGrad-style gradient surgery between the diffusion and
     # alignment gradients, using an EMA of the diffusion gradient as the stable
     # reference direction. Requires bf16 (fp16 GradScaler is incompatible with
     # manually-assembled gradients).

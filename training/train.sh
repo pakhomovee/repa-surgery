@@ -24,7 +24,7 @@
 #                               baseline   plain SiT (enc-type=none, proj-coeff=0)
 #                               haste      alignment until HASTE_END_STEP, then
 #                                          pure diffusion (REPA early-stopping)
-#                               repa-sigma PCGrad gradient surgery (forces bf16)
+#                               repa-PCGrad PCGrad gradient surgery (forces bf16)
 #       --baseline            shortcut for --mode baseline
 #       --prepare             run dataset prep before training
 #       --skip-setup          skip env + dependency setup
@@ -82,8 +82,8 @@ ENV_FILE="$SCRIPT_DIR/envs/${DATASET}.env"
 [[ -f "$ENV_FILE" ]] || die "No env file: $ENV_FILE"
 
 case "$MODE" in
-  repa|baseline|haste|repa-sigma) ;;
-  *) die "Invalid --mode '$MODE' (expected 'repa', 'baseline', 'haste', or 'repa-sigma')" ;;
+  repa|baseline|haste|repa-PCGrad) ;;
+  *) die "Invalid --mode '$MODE' (expected 'repa', 'baseline', 'haste', or 'repa-PCGrad')" ;;
 esac
 
 # ---- Environment setup -----------------------------------------------------
@@ -124,7 +124,7 @@ if [[ "$DO_PREPARE" == "1" ]]; then
 fi
 
 # ---- Optional: precompute encoder representations (opt-in; ~50-80 GB) -------
-# Removes the per-step encoder forward + raw-image read from repa/haste/repa-sigma.
+# Removes the per-step encoder forward + raw-image read from repa/haste/repa-PCGrad.
 # Once present, training auto-uses it (see --repr-dir wiring below).
 if [[ "${PRECOMPUTE_REPR:-0}" == "1" && "$MODE" != "baseline" && ! -f "${REPR_PATH}/meta.json" ]]; then
   log "Precomputing ${REPR_ENC} representations -> ${REPR_PATH}"
@@ -147,7 +147,7 @@ MAX_TRAIN_STEPS="${MAX_TRAIN_STEPS:-$DEFAULT_MAX_TRAIN_STEPS}"
 
 # ---- Mode-specific configuration -------------------------------------------
 # baseline: no alignment.  repa: alignment from env.  haste: alignment until a
-# termination step, then pure diffusion.  repa-sigma: PCGrad gradient surgery.
+# termination step, then pure diffusion.  repa-PCGrad: PCGrad gradient surgery.
 PRECISION="fp16"
 MODE_ARGS=()
 case "$MODE" in
@@ -157,7 +157,7 @@ case "$MODE" in
     ;;
   haste)
     MODE_ARGS+=("--alignment-end-step=${HASTE_END_STEP:-100000}") ;;
-  repa-sigma)
+  repa-PCGrad)
     # Manual two-gradient surgery is incompatible with fp16's GradScaler.
     PRECISION="bf16"
     MODE_ARGS+=("--grad-surgery" "--grad-ema-decay=${GRAD_EMA_DECAY:-0.99}") ;;

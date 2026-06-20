@@ -4,7 +4,9 @@
 Reads every kid_*.csv in the given folder (one run each, ideally named
 kid_<mode>_<N>.csv, e.g. kid_repa_25k.csv), reports KID x10^3 (± SE) and, if the
 CSV has a `fid` column, FID too; tests plateau differences vs baseline / REPA and
-writes figures for each metric.
+writes figures for each metric. Also runs the REPA-style "a fixed quality level is
+reached faster" analysis: iterations to hit target KID/FID levels and the speedup
+vs the reference run (baseline, or REPA when baseline lacks the metric).
 
 Usage:
     python results/analysis/analyze_kid.py results/celeba
@@ -25,10 +27,10 @@ import matplotlib.pyplot as plt
 KID_SCALE = 1e3  # report KID x10^3
 
 PRETTY = {"baseline": "baseline", "repa": "REPA", "haste": "HASTE",
-          "sigma": "REPA-σ", "repa-sigma": "REPA-σ"}
+          "pcgrad": "REPA-PCGrad", "repa-PCGrad": "REPA-PCGrad"}
 COLOR = {"baseline": "#888888", "repa": "#1f77b4", "haste": "#ff7f0e",
-         "sigma": "#2ca02c", "repa-sigma": "#2ca02c"}
-ORDER = ["baseline", "repa", "haste", "sigma", "repa-sigma"]
+         "pcgrad": "#2ca02c", "repa-PCGrad": "#2ca02c"}
+ORDER = ["baseline", "repa", "haste", "pcgrad", "repa-PCGrad"]
 _CYCLE = ["#9467bd", "#8c564b", "#e377c2", "#17becf", "#bcbd22"]
 
 
@@ -66,6 +68,24 @@ def plateau(values, n):
     mu = statistics.mean(tail)
     se = statistics.pstdev(tail) / (len(tail) ** 0.5) if len(tail) > 1 else 0.0
     return mu, se
+
+
+def crossing_step(steps, values, thresh):
+    """First step at which `values` first reaches <= `thresh` (linear interp in step).
+
+    Returns None if the run never gets that low. This is the REPA "iterations to
+    reach a fixed quality" quantity; the first crossing is used (later dips back
+    above the threshold are ignored, matching how speedup is reported in REPA)."""
+    if values[0] <= thresh:
+        return float(steps[0])
+    for i in range(1, len(values)):
+        if values[i] <= thresh:
+            v0, v1, s0, s1 = values[i - 1], values[i], steps[i - 1], steps[i]
+            if v0 == v1:
+                return float(s1)
+            frac = (v0 - thresh) / (v0 - v1)
+            return s0 + frac * (s1 - s0)
+    return None
 
 
 def report_and_plot(runs, vkey, sekey, name, ylabel, title, out, args):
@@ -132,6 +152,78 @@ def report_and_plot(runs, vkey, sekey, name, ylabel, title, out, args):
     fig.tight_layout(); fig.savefig(out / "plateau_bar.png", dpi=140); plt.close(fig)
 
 
+def speedup(runs, vkey, name, ylabel, title, out, args):
+    """REPA-style "fixed quality reached faster": iterations to hit a target metric.
+
+    Picks a reference run (baseline if present, else REPA), turns its plateau into
+    a ladder of targets (factor x plateau), and reports the first step each run
+    reaches each target plus the speedup = ref_steps / run_steps vs the reference.
+    Writes a steps-to-target curve and a headline speedup bar."""
+    out.mkdir(parents=True, exist_ok=True)
+    keys = [r["key"] for r in runs]
+    ref_key = next((k for k in ("baseline", "repa") if k in keys), runs[0]["key"])
+    ref = next(r for r in runs if r["key"] == ref_key)
+    p_ref, _ = plateau(ref[vkey], args.plateau)
+    # Targets the reference actually reaches (so its speedup is the 1.0 anchor).
+    levels = sorted({round(p_ref * f, 4) for f in args.speedup_factors}, reverse=True)
+    ref_steps = {lv: crossing_step(ref["steps"], ref[vkey], lv) for lv in levels}
+    levels = [lv for lv in levels if ref_steps[lv] is not None]
+    if not levels:
+        print(f"\n=== {title}: {name} speedup — reference {ref['label']} reaches no target, skipped ===")
+        return
+
+    print(f"\n=== {title}: steps to reach a fixed {name} "
+          f"(targets = factor x {ref['label']} plateau {p_ref:.3f}) ===")
+    header = "  " + " " * 16 + "".join(f"{('<=' + format(lv, '.2f')):>13s}" for lv in levels)
+    print(header)
+    steps_by_run = {}  # key -> {level: step}
+    for r in runs:
+        cells, sr = [], {}
+        for lv in levels:
+            s = crossing_step(r["steps"], r[vkey], lv)
+            sr[lv] = s
+            if s is None:
+                cells.append(f"{'—':>13s}")
+            else:
+                rs = ref_steps[lv]
+                spd = f"({rs / s:.2f}x)" if (rs and s) else ""
+                cells.append(f"{s / 1000:6.0f}k{spd:>6s}")
+        steps_by_run[r["key"]] = sr
+        print(f"  {r['label']:16s}" + "".join(cells))
+    print(f"  (speedup vs {ref['label']} in parentheses; >1 = reaches that {name} in fewer steps)")
+
+    # Steps-to-target curve: harder targets to the right (x inverted).
+    fig, ax = plt.subplots(figsize=(7.5, 4.5))
+    for r in runs:
+        xs = [lv for lv in levels if steps_by_run[r["key"]][lv] is not None]
+        ys = [steps_by_run[r["key"]][lv] for lv in xs]
+        if xs:
+            ax.plot(xs, ys, marker="o", ms=5, color=r["color"], label=r["label"])
+    ax.invert_xaxis()
+    ax.set_xlabel(f"target {ylabel}  (harder ->)"); ax.set_ylabel("training steps to reach")
+    ax.set_title(f"{title} — steps to reach a fixed {name}")
+    ax.grid(True, alpha=0.3); ax.legend()
+    fig.tight_layout(); fig.savefig(out / "speedup_curve.png", dpi=140); plt.close(fig)
+
+    # Headline speedup bar at the hardest target the reference reaches.
+    lv = levels[-1]
+    rs = ref_steps[lv]
+    labels, spds, colors = [], [], []
+    for r in runs:
+        s = steps_by_run[r["key"]][lv]
+        labels.append(r["label"]); colors.append(r["color"])
+        spds.append(rs / s if (s and rs) else 0.0)
+    fig, ax = plt.subplots(figsize=(6.5, 4.2))
+    ax.bar(labels, spds, color=colors)
+    ax.axhline(1.0, color="#888888", ls="--", lw=1)
+    for i, s in enumerate(spds):
+        ax.text(i, s, f"{s:.2f}x" if s else "—", ha="center", va="bottom", fontsize=9)
+    ax.set_ylabel(f"speedup vs {ref['label']}  (higher = faster)")
+    ax.set_title(f"{title} — steps to reach {name} <= {lv:.2f}")
+    ax.grid(True, axis="y", alpha=0.3); plt.xticks(rotation=15, ha="right")
+    fig.tight_layout(); fig.savefig(out / "speedup_bar.png", dpi=140); plt.close(fig)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -140,6 +232,9 @@ def main() -> None:
     ap.add_argument("--subsets", type=int, default=100,
                     help="KID subsets (for SE from old CSVs without kid_se).")
     ap.add_argument("--zoom-from", type=int, default=100000, help="Plateau plot start step.")
+    ap.add_argument("--speedup-factors", type=float, nargs="+", default=[2.0, 1.5, 1.25, 1.1],
+                    help="Targets for the steps-to-fixed-quality analysis, as multiples "
+                         "of the reference run's plateau (REPA-style speedup).")
     ap.add_argument("--output", type=Path, default=None, help="PNG output dir (default: folder).")
     ap.add_argument("--title", default=None, help="Title prefix (default: folder name).")
     args = ap.parse_args()
@@ -161,10 +256,12 @@ def main() -> None:
 
     # KID uses every run; FID uses only the runs whose CSV has a `fid` column.
     report_and_plot(runs, "kid", "kse", "KID x10^3", r"KID $\times 10^3$", title, out / "kid", args)
+    speedup(runs, "kid", "KID x10^3", r"KID $\times 10^3$", title, out / "kid", args)
 
     fid_runs = [r for r in runs if r["fid"] is not None]
     if fid_runs:
         report_and_plot(fid_runs, "fid", None, "FID", "FID", title, out / "fid", args)
+        speedup(fid_runs, "fid", "FID", "FID", title, out / "fid", args)
         skipped = [r["label"] for r in runs if r["fid"] is None]
         note = f"  (FID skipped for: {', '.join(skipped)})" if skipped else ""
         print(f"\nWrote {out}/kid/ and {out}/fid/ plots{note}")

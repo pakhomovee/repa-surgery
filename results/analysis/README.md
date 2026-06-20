@@ -19,7 +19,7 @@ the CSV has a `fid` column — newer `evaluate.py` writes both):
 - writes figures into the folder (or `--output`): `kid_curve_full.png`,
   `kid_plateau.png`, `kid_plateau_bar.png`, and the `fid_*.png` equivalents.
 
-Known modes (`baseline`, `repa`, `haste`, `sigma`/`repa-sigma`) get fixed
+Known modes (`baseline`, `repa`, `haste`, `pcgrad`/`repa-PCGrad`) get fixed
 colors/labels/order; anything else is picked up automatically. New-format CSVs
 carry `kid_se`; older ones derive SE from `kid_std` via `--subsets` (default 100).
 
