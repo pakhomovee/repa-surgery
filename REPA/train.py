@@ -157,6 +157,8 @@ def main(args):
             )
         if args.gradient_accumulation_steps != 1:
             raise ValueError("--grad-surgery requires --gradient-accumulation-steps=1.")
+    elif args.precond:
+        raise ValueError("--precond only applies to --grad-surgery (REPA-PCGrad).")
 
     if accelerator.is_main_process:
         os.makedirs(args.output_dir, exist_ok=True)  # Make results folder (holds all experiment subfolders)
@@ -420,8 +422,38 @@ def main(args):
                 # clamp(dot, max=0) => scale is 0 when there is no conflict, which
                 # avoids a second device sync / branch.
                 if repa_grads:
-                    dot = sum((g * grad_ema[i]).sum() for g, i in zip(repa_grads, idx))
-                    ema_sq = torch.stack(torch._foreach_norm(grad_ema)).pow(2).sum() + 1e-12
+                    if args.precond:
+                        # Diagonal preconditioner P = 1/(sqrt(v_hat)+eps) from
+                        # AdamW's bias-corrected 2nd moment, so the conflict test
+                        # is in the whitened (~diffusion-curvature) metric rather
+                        # than Euclidean. P(p) returns None before the optimizer's
+                        # first step (no state yet) => fall back to P=1. Computed
+                        # inline so no full-model copy of P is ever held.
+                        opt_state = getattr(optimizer, "optimizer", optimizer).state
+                        beta2 = args.adam_beta2
+
+                        def precond(p):
+                            st = opt_state.get(p)
+                            if not st or "exp_avg_sq" not in st:
+                                return None
+                            step_t = st["step"]
+                            step_v = step_t.item() if torch.is_tensor(step_t) else step_t
+                            bc = 1.0 - beta2 ** step_v
+                            v_hat = st["exp_avg_sq"] / max(bc, 1e-12)
+                            return v_hat.sqrt().add_(args.precond_eps).reciprocal_()
+
+                        def pmul(t, p):
+                            P = precond(p)
+                            return t if P is None else t * P
+
+                        # <g_repa, g_ema>_P over the alignment subset; <g_ema, g_ema>_P over all.
+                        dot = sum((pmul(g, params[i]) * grad_ema[i]).sum()
+                                  for g, i in zip(repa_grads, idx))
+                        ema_sq = sum((pmul(ge, params[k]) * ge).sum()
+                                     for k, ge in enumerate(grad_ema)) + 1e-12
+                    else:
+                        dot = sum((g * grad_ema[i]).sum() for g, i in zip(repa_grads, idx))
+                        ema_sq = torch.stack(torch._foreach_norm(grad_ema)).pow(2).sum() + 1e-12
                     scale = (torch.clamp(dot, max=0.0) / ema_sq).item()
                     # grad <- g_diff - scale * g_ema (+ g_repa on its subset)
                     torch._foreach_add_(grads, grad_ema, alpha=-scale)
@@ -582,6 +614,12 @@ def parse_args(input_args=None):
     # manually-assembled gradients).
     parser.add_argument("--grad-surgery", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--grad-ema-decay", type=float, default=0.99)
+    # Preconditioned surgery: measure the diffusion/alignment conflict in the
+    # metric induced by Adam's 2nd-moment (a diagonal whitening of the diffusion
+    # curvature) instead of the plain Euclidean inner product. Free: reuses the
+    # exp_avg_sq AdamW already stores.
+    parser.add_argument("--precond", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--precond-eps", type=float, default=1e-8)
 
     if input_args is not None:
         args = parser.parse_args(input_args)

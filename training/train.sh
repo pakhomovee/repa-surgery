@@ -160,7 +160,9 @@ case "$MODE" in
   repa-PCGrad)
     # Manual two-gradient surgery is incompatible with fp16's GradScaler.
     PRECISION="bf16"
-    MODE_ARGS+=("--grad-surgery" "--grad-ema-decay=${GRAD_EMA_DECAY:-0.99}") ;;
+    MODE_ARGS+=("--grad-surgery" "--grad-ema-decay=${GRAD_EMA_DECAY:-0.99}")
+    # PRECOND=1 measures the conflict in Adam's whitened metric (see --precond).
+    [[ "${PRECOND:-0}" == "1" ]] && MODE_ARGS+=("--precond") ;;
 esac
 
 # Auto-use precomputed encoder representations for alignment modes when present
