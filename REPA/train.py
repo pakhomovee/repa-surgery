@@ -52,6 +52,58 @@ def _allreduce_mean(tensors, world_size):
     return list(_unflatten_dense_tensors(flat, tensors))
 
 
+@torch.no_grad()
+def _write_rho_csv(path, step, rows):
+    import csv
+    new = not os.path.exists(path)
+    with open(path, "a", newline="") as f:
+        w = csv.writer(f)
+        if new:
+            w.writerow(["step", "t_lo", "t_hi", "t_center", "rho",
+                        "g_diff_norm", "g_repa_norm", "n"])
+        for r in rows:
+            w.writerow([step, r["t_lo"], r["t_hi"], r["t_center"], r["rho"],
+                        r["g_diff_norm"], r["g_repa_norm"], r["n"]])
+
+
+def measure_grad_conflict(model, loss_fn, images, model_kwargs, zs, params,
+                          num_bins, world_size, device):
+    """Per-noise-bin cosine between the diffusion and alignment gradients.
+
+    Stratifies a batch evenly across `num_bins` timestep bins, then per bin
+    computes g_diff and g_repa via autograd over a shared forward and their
+    cosine. Diagnostics only: uses torch.autograd.grad (the model's .grad and the
+    optimizer are untouched) and runs on the DDP-unwrapped model, so it does not
+    perturb training. Returns a list of per-bin dicts.
+    """
+    B = images.shape[0]
+    bin_idx = torch.arange(B, device=device) * num_bins // B          # even fill
+    t = (bin_idx + torch.rand(B, device=device)) / num_bins           # uniform in-bin
+    dn, pr, _ = loss_fn.per_sample(model, images, model_kwargs, zs=zs, time_input=t)
+
+    rows = []
+    for k in range(num_bins):
+        m = bin_idx == k
+        if int(m.sum()) < 2:
+            continue
+        g_d = torch.autograd.grad(dn[m].mean(), params, retain_graph=True, allow_unused=True)
+        g_r = torch.autograd.grad(pr[m].mean(), params, retain_graph=True, allow_unused=True)
+        g_d = [g if g is not None else torch.zeros_like(p) for g, p in zip(g_d, params)]
+        g_r = [g if g is not None else torch.zeros_like(p) for g, p in zip(g_r, params)]
+        if world_size > 1:
+            g_d = _allreduce_mean(g_d, world_size)
+            g_r = _allreduce_mean(g_r, world_size)
+        dot = sum((a * b).sum() for a, b in zip(g_d, g_r))
+        nd = sum((a * a).sum() for a in g_d).sqrt()
+        nr = sum((b * b).sum() for b in g_r).sqrt()
+        rows.append({"t_lo": k / num_bins, "t_hi": (k + 1) / num_bins,
+                     "t_center": (k + 0.5) / num_bins,
+                     "rho": (dot / (nd * nr + 1e-12)).item(),
+                     "g_diff_norm": nd.item(), "g_repa_norm": nr.item(),
+                     "n": int(m.sum())})
+    return rows
+
+
 def preprocess_raw_image(x, enc_type):
     resolution = x.shape[-1]
     if 'clip' in enc_type:
@@ -485,7 +537,21 @@ def main(args):
             ### enter
             if accelerator.sync_gradients:
                 progress_bar.update(1)
-                global_step += 1                
+                global_step += 1
+
+            # Diagnostics: per-noise-bin gradient conflict (no effect on training).
+            if (args.log_grad_conflict and align_now and len(zs) > 0
+                    and accelerator.sync_gradients
+                    and global_step % args.grad_conflict_every == 0):
+                unwrapped = accelerator.unwrap_model(model)
+                gc_params = [p for p in unwrapped.parameters() if p.requires_grad]
+                rows = measure_grad_conflict(
+                    unwrapped, loss_fn, x, dict(y=labels), zs, gc_params,
+                    args.grad_conflict_bins, accelerator.num_processes, device)
+                if accelerator.is_main_process:
+                    _write_rho_csv(os.path.join(args.output_dir, args.exp_name, "rho.csv"),
+                                   global_step, rows)
+
             if global_step % args.checkpointing_steps == 0 and global_step > 0:
                 if accelerator.is_main_process:
                     checkpoint = {
@@ -620,6 +686,13 @@ def parse_args(input_args=None):
     # exp_avg_sq AdamW already stores.
     parser.add_argument("--precond", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--precond-eps", type=float, default=1e-8)
+
+    # Diagnostics: log per-noise-bin gradient conflict cos(g_diff, g_repa) to
+    # <output-dir>/<exp-name>/rho.csv every N steps. Off by default; does not
+    # affect the optimization (autograd.grad on the unwrapped model).
+    parser.add_argument("--log-grad-conflict", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--grad-conflict-every", type=int, default=1000)
+    parser.add_argument("--grad-conflict-bins", type=int, default=8)
 
     if input_args is not None:
         args = parser.parse_args(input_args)

@@ -98,3 +98,35 @@ class SILoss:
             proj_loss = torch.zeros((), device=images.device)
 
         return denoising_loss, proj_loss
+
+    def per_sample(self, model, images, model_kwargs=None, zs=None, time_input=None):
+        """Per-sample (denoising, proj) losses + timesteps, for gradient-conflict
+        diagnostics (log_grad_conflict). Unlike __call__, proj is kept PER SAMPLE
+        (mean cosine over tokens, not over the batch). If time_input is given
+        (shape (B,) or (B,1,1,1)) it overrides the random timestep -- used to
+        stratify a batch evenly across noise bins. Assumes v-prediction.
+        """
+        if model_kwargs is None:
+            model_kwargs = {}
+        B = images.shape[0]
+        if time_input is None:
+            time_input = torch.rand((B, 1, 1, 1))
+        time_input = time_input.reshape(B, 1, 1, 1).to(device=images.device, dtype=images.dtype)
+
+        noises = torch.randn_like(images)
+        alpha_t, sigma_t, d_alpha_t, d_sigma_t = self.interpolant(time_input)
+        model_input = alpha_t * images + sigma_t * noises
+        model_target = d_alpha_t * images + d_sigma_t * noises  # v-prediction
+        model_output, zs_tilde = model(model_input, time_input.flatten(), **model_kwargs)
+
+        denoising = mean_flat((model_output - model_target) ** 2)        # (B,)
+        if zs is not None and len(zs) > 0:
+            proj = 0.
+            for z, z_tilde in zip(zs, zs_tilde):
+                z = torch.nn.functional.normalize(z, dim=-1)
+                z_tilde = torch.nn.functional.normalize(z_tilde, dim=-1)
+                proj = proj - (z * z_tilde).sum(dim=-1).mean(dim=1)      # mean over T -> (B,)
+            proj = proj / len(zs)
+        else:
+            proj = torch.zeros(B, device=images.device)
+        return denoising, proj, time_input.flatten()

@@ -105,6 +105,27 @@ torch-fidelity / torchmetrics). Compare runs and plot with
 `--cfg-scale`, `--num-steps`, `--weights {ema,model}`. The FID Inception weights
 download on first use (`network_turbo` on AutoDL handles it).
 
+## Gradient-conflict diagnostics (ρ(t))
+
+The motivating hypothesis for the surgery methods is that the diffusion and
+alignment gradients *cooperate at high noise and conflict at low noise*. To
+measure it, train an alignment mode with `LOG_GRAD_CONFLICT=1`:
+
+```bash
+LOG_GRAD_CONFLICT=1 training/train.sh -d celeba --gpus 0,1 --mode repa ...
+# -> runs/<exp>/rho.csv  (one row per (step, noise bin): cos(g_diff, g_repa) + norms)
+python results/analysis/analyze_rho.py runs/<exp>   # -> rho_heatmap.png, rho_slices.png
+```
+
+Every `GRAD_CONFLICT_EVERY` steps (default 1000) it stratifies a batch evenly
+across `GRAD_CONFLICT_BINS` (default 8) timestep bins and, per bin, computes
+`cos(∇ℓ_diff, ∇ℓ_repa)` via `torch.autograd.grad` over a shared forward. It runs
+on the **DDP-unwrapped** model and never touches `.grad`/the optimizer, so it
+does not affect training; cost is ~`2·bins` extra backward passes every N steps.
+The heatmap (cos over noise level × step, with the `cos=0` boundary `t*` overlaid)
+is the mechanism figure. Only meaningful for alignment modes (skipped for
+`baseline`, and for `haste` after its termination step).
+
 ## Checking for memorization
 
 [`memorization.py`](memorization.py) checks whether a checkpoint copies training

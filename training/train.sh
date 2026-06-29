@@ -172,6 +172,14 @@ if [[ "$MODE" != "baseline" && "${NO_REPR:-0}" != "1" && -f "${REPR_PATH}/meta.j
   log "using precomputed representations: ${REPR_PATH}"
 fi
 
+# Diagnostics: log per-noise-bin gradient conflict to <run>/rho.csv (alignment
+# modes only). Enable with LOG_GRAD_CONFLICT=1; tune via GRAD_CONFLICT_EVERY/BINS.
+if [[ "$MODE" != "baseline" && "${LOG_GRAD_CONFLICT:-0}" == "1" ]]; then
+  MODE_ARGS+=("--log-grad-conflict"
+              "--grad-conflict-every=${GRAD_CONFLICT_EVERY:-1000}"
+              "--grad-conflict-bins=${GRAD_CONFLICT_BINS:-8}")
+fi
+
 # Auto exp-name, e.g. celeba_sit-b_2_repa  /  celeba_sit-b_2_haste
 if [[ -z "$EXP_NAME" ]]; then
   _m="$(echo "$MODEL" | tr 'A-Z/' 'a-z_' | tr -d ' ')"
