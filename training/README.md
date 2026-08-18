@@ -95,6 +95,21 @@ python training/evaluate.py \
 # -> ../runs/.../eval/kid.csv (step, kid_mean/se, fid) + kid_curve.png (KID+FID)
 ```
 
+To score **every** run under `runs/` with identical sampler settings (they are
+only comparable if the settings match), use [`eval_all.sh`](eval_all.sh):
+
+```bash
+training/eval_all.sh --gpus 0,1 --num-samples 10000 --compile
+# -> per run: <run>/eval/kid.csv + eval.log
+# -> collected: results/<dataset>/kid_<mode>.csv  (for analyze_kid.py)
+# -> a best-checkpoint summary table at the end
+```
+
+It skips run dirs with no checkpoints (and anything matching `--exclude`,
+default `^timing`), keeps going if one run fails, and exits non-zero if any did.
+`--dry-run` prints the `evaluate.py` commands without running them; anything
+after `--` is passed through (e.g. `-- --refresh`).
+
 The CSV reports `KID×10³ ± SE` (SE = std/√subsets, the right error bar — *not* the
 raw subset std) and `fid`. KID uses the canonical FID InceptionV3 (`pytorch-fid`)
 and the cubic polynomial-kernel MMD² estimator (subset-averaged, as in
