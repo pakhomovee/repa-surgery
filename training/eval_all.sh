@@ -27,8 +27,11 @@
 #       --exclude REGEX     skip runs whose name matches   (default: ^timing)
 #       --collect DIR       collect CSVs here (default: results/<dataset>)
 #       --no-collect        do not copy kid.csv anywhere
+#       --shutdown          power the machine off when the sweep finishes
 #       --dry-run           print what would run and exit
 #   --                      pass everything after this verbatim to evaluate.py
+#
+# Env vars: SHUTDOWN_CMD   (default 'shutdown -h now'), SHUTDOWN_DELAY (default 60).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -49,6 +52,8 @@ INCLUDE=""
 EXCLUDE="^timing"
 COLLECT=""
 DO_COLLECT=1
+SHUTDOWN=0
+SHUTDOWN_CMD="${SHUTDOWN_CMD:-shutdown -h now}"
 DRY_RUN=0
 EXTRA_ARGS=()
 
@@ -68,6 +73,7 @@ while [[ $# -gt 0 ]]; do
     --exclude)      EXCLUDE="$2"; shift 2 ;;
     --collect)      COLLECT="$2"; shift 2 ;;
     --no-collect)   DO_COLLECT=0; shift ;;
+    --shutdown)     SHUTDOWN=1; shift ;;
     --dry-run)      DRY_RUN=1; shift ;;
     --)             shift; EXTRA_ARGS=("$@"); break ;;
     -h|--help)      sed -n '2,31p' "${BASH_SOURCE[0]}"; exit 0 ;;
@@ -76,6 +82,22 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -d "$RUNS_DIR" ]] || die "No runs dir: $RUNS_DIR"
+
+# Fail fast: a missing shutdown binary must not surface only after hours of eval.
+if [[ "$SHUTDOWN" == "1" ]]; then
+  command -v "${SHUTDOWN_CMD%% *}" >/dev/null \
+    || die "--shutdown: '${SHUTDOWN_CMD%% *}' not found (override with SHUTDOWN_CMD=...)"
+fi
+
+# Power off after the sweep. Deliberately NOT an EXIT trap: Ctrl-C should stop
+# the sweep, not shut the machine down.
+maybe_shutdown() {
+  [[ "$SHUTDOWN" == "1" ]] || return 0
+  local delay="${SHUTDOWN_DELAY:-60}"
+  warn "sweep finished -- running '$SHUTDOWN_CMD' in ${delay}s (Ctrl-C to cancel)"
+  sleep "$delay"
+  $SHUTDOWN_CMD
+}
 
 # Inception + SD-VAE weights come from HF/torch.hub on first use.
 setup_hf_env
@@ -103,6 +125,7 @@ fi
 log "runs dir : $RUNS_DIR"
 log "runs     : ${RUNS[*]}"
 log "settings : samples=$NUM_SAMPLES real=$NUM_REAL steps=$NUM_STEPS cfg=$CFG_SCALE"
+[[ "$SHUTDOWN" == "1" ]] && log "shutdown : '$SHUTDOWN_CMD' when the sweep finishes"
 log "           weights=$WEIGHTS every=$EVERY gen-batch=$GEN_BATCH gpus=$GPUS compile=$COMPILE"
 
 EVAL_ARGS=(
@@ -175,6 +198,8 @@ PY
 
 if [[ ${#FAILED[@]} -gt 0 ]]; then
   warn "failed runs: ${FAILED[*]}"
+  maybe_shutdown
   exit 1
 fi
 log "done: ${#OK[@]} run(s) evaluated"
+maybe_shutdown

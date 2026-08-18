@@ -110,6 +110,18 @@ default `^timing`), keeps going if one run fails, and exits non-zero if any did.
 `--dry-run` prints the `evaluate.py` commands without running them; anything
 after `--` is passed through (e.g. `-- --refresh`).
 
+`--shutdown` powers the machine off when the sweep finishes (handy for an
+unattended overnight sweep on a metered box). It runs `SHUTDOWN_CMD`
+(default `shutdown -h now`) after `SHUTDOWN_DELAY` seconds (default 60, so you
+can still cancel), on both the success and failure paths — but *not* on Ctrl-C,
+and the binary is checked up front rather than after hours of eval.
+
+**Caching caveat:** `evaluate.py` keys cached features by `(step, rank)` only,
+not by the settings that produced them. Changing `--num-samples`, `--cfg-scale`,
+`--num-steps`, `--weights`, or the *number* of GPUs silently reuses features
+computed under the old settings — delete `runs/*/eval/{real,fake}_*.pt` (or pass
+`-- --refresh --refresh-real`) when you change any of them.
+
 The CSV reports `KID×10³ ± SE` (SE = std/√subsets, the right error bar — *not* the
 raw subset std) and `fid`. KID uses the canonical FID InceptionV3 (`pytorch-fid`)
 and the cubic polynomial-kernel MMD² estimator (subset-averaged, as in
