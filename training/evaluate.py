@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import re
 import sys
 from pathlib import Path
@@ -60,30 +61,77 @@ def infer_z_dims(state_dict: dict) -> list[int]:
     return [z_by_idx[i] for i in sorted(z_by_idx)]
 
 
-def load_sit(ckpt_path: Path, weights: str, device):
-    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    targs = ckpt["args"]
-    state = ckpt[weights]
+def _arch_key(targs, z_dims) -> tuple:
+    """Everything that changes the module's shape (not its weights)."""
+    return (targs.model, targs.resolution, targs.num_classes, targs.cfg_prob > 0,
+            tuple(z_dims), targs.encoder_depth, targs.qk_norm)
+
+
+def build_sit(targs, z_dims, device):
     model = SiT_models[targs.model](
         input_size=targs.resolution // 8, num_classes=targs.num_classes,
-        use_cfg=(targs.cfg_prob > 0), z_dims=infer_z_dims(state),
+        use_cfg=(targs.cfg_prob > 0), z_dims=z_dims,
         encoder_depth=targs.encoder_depth,
         fused_attn=targs.fused_attn, qk_norm=targs.qk_norm,
     ).to(device)
-    model.load_state_dict(state)
+    # SDPA vs the manual matmul path is a kernel choice, not a math change, so
+    # force it on for sampling even if the run was trained with --no-fused-attn
+    # (train.py defaults to True, so this is normally a no-op).
+    if not getattr(targs, "fused_attn", True):
+        for blk in model.blocks:
+            blk.attn.fused_attn = True
     model.eval()
-    return model, targs
+    return model
 
 
-@torch.no_grad()
-def generate_images(model, vae, targs, n, cfg_scale, num_steps, gen_batch, device, seed):
+class SitLoader:
+    """Build the SiT once per rank; swap weights per checkpoint.
+
+    Every checkpoint in a run shares the architecture, so rebuilding per
+    checkpoint is wasted work -- and with --compile it would re-trace each time.
+    load_state_dict copies in place, so the compiled graph (which specializes on
+    parameter pointers) stays valid across checkpoints.
+    """
+
+    def __init__(self, device, compile_model: bool = False):
+        self.device = device
+        self.compile_model = compile_model
+        self._key = None
+        self._raw = None    # uncompiled module -- weights are loaded here
+        self.model = None   # what the sampler calls (compiled wrapper, or _raw)
+
+    def load(self, ckpt_path: Path, weights: str):
+        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+        targs, state = ckpt["args"], ckpt[weights]
+        z_dims = infer_z_dims(state)
+        key = _arch_key(targs, z_dims)
+        if key != self._key:
+            self._raw = build_sit(targs, z_dims, self.device)
+            self.model = torch.compile(self._raw) if self.compile_model else self._raw
+            self._key = key
+        self._raw.load_state_dict(state)
+        self._raw.eval()
+        return self.model, targs
+
+
+@torch.inference_mode()
+def generate_features(model, vae, inception, targs, n, cfg_scale, num_steps, gen_batch,
+                      device, seed):
+    """Generate n samples and return their Inception features.
+
+    Each batch is featurized as it is produced rather than buffered: at 256px an
+    fp32 image is 786 KB, so a 5000-sample shard used to hold ~4 GB of CPU RAM
+    (and bounce every image host->device again for Inception). Sampling itself is
+    untouched -- same generator, same draw order, same labels, Inception still
+    runs outside autocast -- so the features are identical to the buffered path.
+    """
     g = torch.Generator(device=device).manual_seed(seed)
     latent_size = targs.resolution // 8
     scale = torch.tensor([0.18215] * 4, device=device).view(1, 4, 1, 1)
     # Sampling runs the model in half precision (like training); without this it
     # falls back to fp32, which is several times slower (esp. on T4/A100).
     amp_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-    out = []
+    feats = []
     for i in tqdm(range(0, n, gen_batch)):
         b = min(gen_batch, n - i)
         y = (torch.arange(i, i + b, device=device) % targs.num_classes)
@@ -95,8 +143,9 @@ def generate_images(model, vae, targs, n, cfg_scale, num_steps, gen_batch, devic
                 num_classes=targs.num_classes,
             ).to(torch.float32)
             img = vae.decode(lat / scale).sample
-        out.append(((img.float() + 1) / 2).clamp(0, 1).cpu())
-    return torch.cat(out)
+        img = ((img.float() + 1) / 2).clamp(0, 1)
+        feats.append(_inception(inception, img, device))
+    return torch.cat(feats)
 
 
 # --------------------------------------------------------------------------- #
@@ -130,12 +179,6 @@ def features_from_paths(paths, inception, device, bs, nw, desc, show):
     loader = DataLoader(_PathImages(paths), batch_size=bs, num_workers=nw, pin_memory=True)
     return torch.cat([_inception(inception, x, device)
                       for x in tqdm(loader, desc=desc, disable=not show)])
-
-
-@torch.no_grad()
-def features_from_images(imgs, inception, device, bs):
-    return torch.cat([_inception(inception, imgs[i:i + bs], device)
-                      for i in range(0, len(imgs), bs)])
 
 
 def _poly_kernel(X, Y):
@@ -215,18 +258,20 @@ def worker(rank, gpu_ids, ckpts, real_files, args, eval_dir):
     # Per-checkpoint fake features.
     vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse").to(device).eval()
     n_shard = args.num_samples // world + (1 if rank < args.num_samples % world else 0)
+    if rank == 0 and args.compile and n_shard % args.gen_batch:
+        print(f"[warn] --gen-batch {args.gen_batch} does not divide the {n_shard}-sample "
+              f"shard; the ragged last batch costs one extra compile per checkpoint.")
+    loader = SitLoader(device, compile_model=args.compile)
     for ck in ckpts:
         step = step_of(ck)
         fpath = eval_dir / f"fake_{step:07d}_rank{rank}.pt"
         if fpath.exists() and not args.refresh:
             continue
-        model, targs = load_sit(ck, args.weights, device)
-        imgs = generate_images(model, vae, targs, n_shard, args.cfg_scale,
-                               args.num_steps, args.gen_batch, device,
-                               seed=args.seed * 131 + rank * 977 + step % 997)
-        feats = features_from_images(imgs, inception, device, args.batch_size)
+        model, targs = loader.load(ck, args.weights)
+        feats = generate_features(model, vae, inception, targs, n_shard, args.cfg_scale,
+                                  args.num_steps, args.gen_batch, device,
+                                  seed=args.seed * 131 + rank * 977 + step % 997)
         torch.save(feats, fpath)
-        del model
         torch.cuda.empty_cache()
         if rank == 0:
             print(f"[gpu{gpu_ids[rank]}] step {step}: {args.num_samples} samples featurized")
@@ -246,9 +291,15 @@ def main() -> None:
     p.add_argument("--weights", choices=["ema", "model"], default="ema")
     p.add_argument("--every", type=int, default=1, help="Evaluate every Nth checkpoint.")
     p.add_argument("--data-dir", type=Path, default=None, help="Real data dir (default: from ckpt).")
-    p.add_argument("--batch-size", type=int, default=128, help="Inception batch size.")
+    p.add_argument("--batch-size", type=int, default=128,
+                   help="Inception batch size for the real-image pass (generated "
+                        "samples are featurized in --gen-batch chunks as produced).")
     p.add_argument("--gen-batch", type=int, default=128,
-                   help="Generation batch size (doubled internally when cfg-scale>1).")
+                   help="Generation batch size (doubled internally when cfg-scale>1). "
+                        "Pick one that divides num-samples/len(gpus) when using --compile.")
+    p.add_argument("--compile", action="store_true",
+                   help="torch.compile the SiT. One warmup per rank (~1-3 min), then "
+                        "reused across checkpoints; worth it for a full run sweep.")
     p.add_argument("--num-workers", type=int, default=8)
     p.add_argument("--kid-subset-size", type=int, default=1000)
     p.add_argument("--kid-subsets", type=int, default=100)
@@ -261,6 +312,10 @@ def main() -> None:
     gpu_ids = [int(g) for g in args.gpus.split(",") if g != ""]
     if not torch.cuda.is_available():
         sys.exit("CUDA required.")
+    if args.compile:
+        # Persist inductor artifacts across invocations (default lives in /tmp).
+        os.environ.setdefault("TORCHINDUCTOR_CACHE_DIR",
+                              str(Path.home() / ".cache" / "inductor_repa"))
 
     if args.ckpt:
         ckpts = [args.ckpt]

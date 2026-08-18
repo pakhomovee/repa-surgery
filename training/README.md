@@ -102,7 +102,18 @@ torch-fidelity / torchmetrics). Compare runs and plot with
 [`results/analysis/analyze_kid.py`](../results/analysis/analyze_kid.py). Knobs:
 `--num-samples`/`--num-real` (10k is plenty for KID; drop to 5k for speed),
 `--every N` (evaluate every Nth checkpoint), `--ckpt` for a single one,
-`--cfg-scale`, `--num-steps`, `--weights {ema,model}`. The FID Inception weights
+`--cfg-scale`, `--num-steps`, `--weights {ema,model}`.
+
+Sampling speed: the SiT is built **once per rank** and only its weights are
+swapped per checkpoint, and each generated batch is featurized as it is produced
+(no multi-GB image buffer). `--gen-batch` defaults to 128 (doubled internally by
+CFG) and rarely fills a 32 GB card -- 250-500 is usually faster. `--compile`
+`torch.compile`s the model: one warmup per rank, then reused across every
+checkpoint, so it pays off on a full sweep but not on a single `--ckpt`. Pick a
+`--gen-batch` that divides `num-samples/len(gpus)` so the ragged last batch does
+not force a second compile. Compiled and eager sampling are not bitwise
+identical, so use the same setting for every run you intend to compare (cached
+features from a previous eval are reused unless you pass `--refresh`). The FID Inception weights
 download on first use (`network_turbo` on AutoDL handles it).
 
 ## Gradient-conflict diagnostics (ρ(t))
