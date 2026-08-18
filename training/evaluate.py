@@ -206,6 +206,18 @@ def compute_kid(real, fake, subset_size, num_subsets, seed, device):
     return vals.mean().item(), vals.std().item()
 
 
+def _sqrtm(a):
+    """scipy.linalg.sqrtm, tolerant of both return conventions.
+
+    `disp` was deprecated in SciPy 1.12 and removed in 1.14: older versions
+    return (sqrt, errest) when disp=False, newer ones return just the matrix
+    and take no disp at all. Calling it without disp works on every version.
+    """
+    from scipy import linalg
+    out = linalg.sqrtm(a)
+    return out[0] if isinstance(out, tuple) else out
+
+
 def compute_fid(real, fake):
     """Frechet Inception Distance from the same cached Inception features.
 
@@ -213,16 +225,15 @@ def compute_fid(real, fake):
     (pytorch-fid's estimator; uses all samples, no subsetting).
     """
     import numpy as np
-    from scipy import linalg
     r = real.double().cpu().numpy()
     f = fake.double().cpu().numpy()
     mu1, mu2 = r.mean(0), f.mean(0)
     s1, s2 = np.cov(r, rowvar=False), np.cov(f, rowvar=False)
     diff = mu1 - mu2
-    covmean, _ = linalg.sqrtm(s1 @ s2, disp=False)
+    covmean = _sqrtm(s1 @ s2)
     if not np.isfinite(covmean).all():  # numerical guard
         off = np.eye(s1.shape[0]) * 1e-6
-        covmean = linalg.sqrtm((s1 + off) @ (s2 + off))
+        covmean = _sqrtm((s1 + off) @ (s2 + off))
     if np.iscomplexobj(covmean):
         covmean = covmean.real
     return float(diff @ diff + np.trace(s1) + np.trace(s2) - 2 * np.trace(covmean))
