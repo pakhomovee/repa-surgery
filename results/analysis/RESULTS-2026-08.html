@@ -1,0 +1,711 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gradient Surgery for REPA</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+*,*::before,*::after{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;}
+body{margin:0;}
+img,svg{max-width:100%;}
+:root{
+  color-scheme: light;
+  --ground:#f5f7f9; --panel:#ffffff; --panel-2:#eef1f5;
+  --ink:#111419; --ink-2:#556074; --ink-3:#8b95a5;
+  --rule:#dde2ea; --rule-2:#c8d0dc;
+  --accent:#2a78d6;
+  --good:#0f7a52; --warn:#a2570a; --crit:#b0272d;
+  --good-bg:#e4f2ec; --warn-bg:#f8eddd; --crit-bg:#fae9e9; --neutral-bg:#e9edf3;
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100; --s5:#e87ba4;
+  --shadow:0 1px 2px rgba(17,20,25,.05), 0 8px 24px -16px rgba(17,20,25,.22);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme: dark;
+    --ground:#0f1216; --panel:#171b21; --panel-2:#1e232b;
+    --ink:#e9edf3; --ink-2:#98a3b4; --ink-3:#6b7686;
+    --rule:#262c35; --rule-2:#333b47;
+    --accent:#5c9ded;
+    --good:#48b98a; --warn:#d9932e; --crit:#e8756f;
+    --good-bg:#12291f; --warn-bg:#2c2113; --crit-bg:#2e1717; --neutral-bg:#21262f;
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.8);
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --ground:#0f1216; --panel:#171b21; --panel-2:#1e232b;
+  --ink:#e9edf3; --ink-2:#98a3b4; --ink-3:#6b7686;
+  --rule:#262c35; --rule-2:#333b47;
+  --accent:#5c9ded;
+  --good:#48b98a; --warn:#d9932e; --crit:#e8756f;
+  --good-bg:#12291f; --warn-bg:#2c2113; --crit-bg:#2e1717; --neutral-bg:#21262f;
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.8);
+}
+
+body{
+  background:var(--ground); color:var(--ink);
+  font-family:"Source Serif 4",Georgia,"Times New Roman",serif;
+  font-size:17px; line-height:1.62;
+  -webkit-font-smoothing:antialiased;
+}
+.shell{max-width:1080px; margin:0 auto; padding:0 28px 100px;}
+.prose{max-width:660px;}
+p{margin:0 0 1.05em;}
+a{color:var(--accent);}
+strong{font-weight:600;}
+em{font-style:italic;}
+
+h1,h2,h3,.eyebrow,.chip,th,.lbl,.num,.metaK,.legend,code,.mono{
+  font-family:"Archivo",-apple-system,"Segoe UI",sans-serif;
+}
+code,.mono,.num,td.n,th.n{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace;}
+
+/* ---- masthead ---- */
+.mast{padding:66px 0 30px; border-bottom:1px solid var(--rule);}
+.kicker{
+  font-family:"Archivo",sans-serif; font-size:11.5px; font-weight:600;
+  letter-spacing:.16em; text-transform:uppercase; color:var(--accent);
+  margin:0 0 18px;
+}
+h1{
+  font-size:clamp(34px,5.4vw,54px); line-height:1.04; font-weight:700;
+  letter-spacing:-.022em; margin:0 0 18px; text-wrap:balance; max-width:16ch;
+}
+.standfirst{
+  font-size:20px; line-height:1.5; color:var(--ink-2); max-width:60ch; margin:0;
+}
+.meta{
+  display:flex; flex-wrap:wrap; gap:0 34px; margin-top:34px;
+  padding-top:22px; border-top:1px solid var(--rule);
+}
+.meta div{display:flex; flex-direction:column; gap:3px;}
+.metaK{font-size:10.5px; font-weight:600; letter-spacing:.13em; text-transform:uppercase; color:var(--ink-3);}
+.metaV{font-family:"IBM Plex Mono",monospace; font-size:13.5px; color:var(--ink); font-variant-numeric:tabular-nums;}
+
+/* ---- sections ---- */
+section{padding:52px 0 8px; border-bottom:1px solid var(--rule);}
+section:last-of-type{border-bottom:0;}
+.eyebrow{
+  font-size:11px; font-weight:600; letter-spacing:.16em; text-transform:uppercase;
+  color:var(--ink-3); margin:0 0 12px;
+}
+h2{font-size:30px; line-height:1.16; font-weight:600; letter-spacing:-.016em; margin:0 0 20px; text-wrap:balance; max-width:22ch;}
+h3{font-size:18px; font-weight:600; letter-spacing:-.006em; margin:34px 0 10px;}
+
+/* ---- verdict chips ---- */
+.chip{
+  display:inline-flex; align-items:center; gap:6px; white-space:nowrap;
+  font-size:10.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase;
+  padding:3px 8px; border-radius:3px; line-height:1.5;
+}
+.chip::before{content:""; width:6px; height:6px; border-radius:50%; background:currentColor; flex:none;}
+.chip.solid{color:var(--good); background:var(--good-bg);}
+.chip.soft{color:var(--warn); background:var(--warn-bg);}
+.chip.risk{color:var(--crit); background:var(--crit-bg);}
+.chip.flat{color:var(--ink-2); background:var(--neutral-bg);}
+
+/* ---- panels & tables ---- */
+.panel{
+  background:var(--panel); border:1px solid var(--rule); border-radius:6px;
+  box-shadow:var(--shadow); margin:26px 0; overflow:hidden;
+}
+.panel-hd{padding:16px 20px 14px; border-bottom:1px solid var(--rule); display:flex; flex-wrap:wrap; gap:10px 16px; align-items:baseline; justify-content:space-between;}
+.panel-t{font-family:"Archivo",sans-serif; font-weight:600; font-size:15px; letter-spacing:-.005em;}
+.panel-s{font-size:13px; color:var(--ink-3); font-family:"Archivo",sans-serif;}
+.scroll{overflow-x:auto;}
+table{border-collapse:collapse; width:100%; font-size:14px;}
+th{
+  font-size:10.5px; font-weight:600; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--ink-3); text-align:left; padding:11px 14px; border-bottom:1px solid var(--rule-2);
+  white-space:nowrap; vertical-align:bottom;
+}
+td{padding:10px 14px; border-bottom:1px solid var(--rule); vertical-align:middle; white-space:nowrap;}
+tbody tr:last-child td{border-bottom:0;}
+th.n,td.n{text-align:right; font-variant-numeric:tabular-nums;}
+td.n{font-size:13.5px;}
+td.name{font-family:"Archivo",sans-serif; font-weight:600; font-size:13.5px;}
+tr.hero td{background:var(--panel-2);}
+.up{color:var(--crit);} .down{color:var(--good);} .flatn{color:var(--ink-3);}
+.swatch{display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:8px; vertical-align:baseline;}
+.sub{font-family:"Archivo",sans-serif; font-weight:500; font-size:11.5px; color:var(--ink-3); letter-spacing:.02em;}
+
+/* inline bar cells */
+.barcell{min-width:190px; width:40%;}
+.bar{position:relative; height:9px; background:var(--panel-2); border-radius:2px; overflow:hidden;}
+.bar span{position:absolute; left:0; top:0; bottom:0; border-radius:2px;}
+
+/* ---- charts ---- */
+.chart{padding:18px 20px 8px;}
+.chart svg{display:block; width:100%; height:auto;}
+.grid{stroke:var(--rule); stroke-width:1;}
+.axis{stroke:var(--rule-2); stroke-width:1;}
+.ln{fill:none; stroke-width:2; stroke-linejoin:round; stroke-linecap:round;}
+.s1{stroke:var(--s1); color:var(--s1);} .s2{stroke:var(--s2); color:var(--s2);}
+.s3{stroke:var(--s3); color:var(--s3);} .s4{stroke:var(--s4); color:var(--s4);}
+.s5{stroke:var(--s5); color:var(--s5);}
+.dot{stroke:var(--panel); stroke-width:2;}
+.f1{fill:var(--s1);} .f2{fill:var(--s2);} .f3{fill:var(--s3);} .f4{fill:var(--s4);} .f5{fill:var(--s5);}
+text{font-family:"IBM Plex Mono",monospace; font-variant-numeric:tabular-nums;}
+.ax{fill:var(--ink-3); font-size:11px;}
+.ay{text-anchor:end;} .axx{text-anchor:middle;}
+.dl{font-family:"Archivo",sans-serif; font-size:12px; font-weight:600; fill:currentColor;}
+.dl2{font-family:"IBM Plex Mono",monospace; font-size:11px; fill:var(--ink-3);}
+.note{font-family:"Archivo",sans-serif; font-size:11.5px; font-weight:500; fill:var(--ink-2);}
+.legend{display:flex; flex-wrap:wrap; gap:6px 18px; padding:4px 20px 18px; font-size:12.5px; color:var(--ink-2); font-weight:500;}
+.legend i{display:inline-block; width:14px; height:3px; border-radius:2px; margin-right:7px; vertical-align:middle;}
+.cap{padding:0 20px 18px; font-size:13.5px; color:var(--ink-2); line-height:1.55; max-width:76ch;}
+
+/* ---- ledger ---- */
+.ledger{display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:18px; margin:26px 0;}
+.card{background:var(--panel); border:1px solid var(--rule); border-radius:6px; padding:20px 22px; box-shadow:var(--shadow);}
+.card h4{font-family:"Archivo",sans-serif; font-size:13px; font-weight:600; letter-spacing:.02em; margin:0 0 14px; display:flex; align-items:center; gap:9px;}
+.card ul{margin:0; padding:0; list-style:none; display:flex; flex-direction:column; gap:13px;}
+.card li{font-size:15px; line-height:1.5; padding-left:16px; position:relative; color:var(--ink-2);}
+.card li::before{content:""; position:absolute; left:0; top:.62em; width:5px; height:5px; border-radius:50%; background:var(--rule-2);}
+.card li b{color:var(--ink); font-weight:600;}
+
+/* ---- queue ---- */
+.queue{list-style:none; padding:0; margin:26px 0; counter-reset:q; display:flex; flex-direction:column; gap:0;}
+.queue li{
+  counter-increment:q; display:grid; grid-template-columns:44px 1fr auto; gap:4px 18px;
+  padding:20px 0; border-top:1px solid var(--rule); align-items:start;
+}
+.queue li:last-child{border-bottom:1px solid var(--rule);}
+.queue li::before{
+  content:counter(q,decimal-leading-zero);
+  font-family:"IBM Plex Mono",monospace; font-size:13px; color:var(--ink-3); padding-top:2px;
+}
+.qt{font-family:"Archivo",sans-serif; font-weight:600; font-size:16px; letter-spacing:-.005em;}
+.qd{grid-column:2; font-size:15px; color:var(--ink-2); line-height:1.5; margin-top:5px; max-width:62ch;}
+.qc{grid-column:3; grid-row:1; text-align:right;}
+.cost{font-family:"IBM Plex Mono",monospace; font-size:12px; color:var(--ink-3); white-space:nowrap;}
+
+/* ---- claims ---- */
+.claims{display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:18px; margin:26px 0;}
+.claim{border-left:2px solid var(--rule-2); padding:2px 0 2px 18px;}
+.claim.yes{border-left-color:var(--good);}
+.claim.no{border-left-color:var(--crit);}
+.claim p{margin:0 0 10px; font-size:15.5px; line-height:1.5;}
+.claim p:last-child{margin:0;}
+.claim .q{font-family:"Source Serif 4",serif; font-style:italic; color:var(--ink);}
+.claim .why{font-size:14px; color:var(--ink-2);}
+
+.pull{
+  font-size:21px; line-height:1.45; color:var(--ink); margin:32px 0;
+  padding:0 0 0 22px; border-left:3px solid var(--accent); max-width:56ch; font-weight:400;
+}
+.foot{padding:44px 0 0; color:var(--ink-3); font-size:13.5px; border-top:1px solid var(--rule); margin-top:44px;}
+.foot code{font-size:12.5px; color:var(--ink-2);}
+kbd,.path{font-family:"IBM Plex Mono",monospace; font-size:13px; background:var(--panel-2); padding:1px 5px; border-radius:3px; color:var(--ink-2);}
+@media (max-width:640px){
+  body{font-size:16px;}
+  .queue li{grid-template-columns:32px 1fr;}
+  .qc{grid-column:2; grid-row:auto; text-align:left; margin-top:6px;}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important; transition:none!important;}}
+</style>
+
+</head>
+<body>
+<div class="shell">
+
+<header class="mast">
+  <p class="kicker">Run analysis · SiT-B/2 · 300k iterations</p>
+  <h1>Gradient Surgery for REPA</h1>
+  <p class="standfirst">Projecting the conflicting component out of the alignment gradient buys two different things: a 1.47× convergence speedup on ImageNet-100, and a persistent 14% FID gain on CelebA — a dataset where alignment itself is worth nothing at all. Here is what the five runs support, what they don't, and the shortest path from here to a submittable paper.</p>
+  <div class="meta">
+    <div><span class="metaK">Model</span><span class="metaV">SiT-B/2 · 256px · SD-VAE</span></div>
+    <div><span class="metaK">Data</span><span class="metaV">ImageNet-100 · 126,689 img</span></div>
+    <div><span class="metaK">Schedule</span><span class="metaV">bs 256 · 300k steps</span></div>
+    <div><span class="metaK">Alignment</span><span class="metaV">DINOv2-B · depth 4 · λ 0.5</span></div>
+    <div><span class="metaK">Eval</span><span class="metaV">10k samples · cfg 1.5 · 50 ODE · EMA</span></div>
+  </div>
+</header>
+
+<section>
+  <p class="eyebrow">The read</p>
+  <h2>One result is strong, one is a null, and one is confounded</h2>
+  <div class="prose">
+    <p><strong>REPA-PCGrad is the finding.</strong> On ImageNet-100 it reaches REPA's final FID in 170k steps instead of 300k — a 1.76× step speedup, 3.33× over the plain SiT baseline — and finishes at FID 9.015 / KID 1.089×10⁻³ against REPA's 9.852 / 1.419×10⁻³. The KID gap is 23% and sits about nine combined standard errors out. This is not noise.</p>
+    <p><strong>HASTE is a null on quality.</strong> Terminating alignment at 100k lands within noise of REPA at 300k (ΔFID −0.07, ΔKID z ≈ −0.9). Its real benefit is that the last 200k steps cost baseline compute — no encoder forward, no image read. That reframes "REPA works until it doesn't" as a <em>cost</em> result rather than a <em>quality</em> result, which is a defensible and publishable position.</p>
+    <p><strong>CelebA is where REPA stops working — and where surgery keeps working.</strong> Baseline, REPA and HASTE plateau at KID 4.18, 4.18, 4.15: three arms agreeing to within 0.05, so alignment on its own buys nothing on a single-domain face dataset. But the preconditioned surgery arm lands at KID 3.87 and FID 6.79 — <strong>7.3% below the baseline</strong> where REPA is 0.1% <em>above</em> it. Surgery converts a worthless alignment loss into a useful one. That is the most interesting single fact in the whole set.</p>
+    <p>Taken together the picture is stronger than any one run: <strong>surgery beats REPA in all eight dataset × conflict-metric × metric cells.</strong> Only <em>which</em> variant wins flips — Euclidean on ImageNet-100, preconditioned on CelebA — and there is a principled reason to expect exactly that.</p>
+    <p>The two results are also different <em>kinds</em> of result, which is easy to miss. On ImageNet-100 the advantage decays as training proceeds — a head start, worth 1.47× wall-clock. On CelebA it does not decay at all: the absolute FID gap holds at 1.14 ± 0.13 across 240k steps while the FID level itself falls 32%. That is the more valuable of the two, because it does not evaporate with more compute.</p>
+    <p>One thing stands between this and a submission: the mechanistic story — that diffusion and alignment gradients conflict at low noise — currently has <em>zero</em> supporting data in the repository.</p>
+  </div>
+</section>
+
+<section>
+  <p class="eyebrow">Headline</p>
+  <h2>ImageNet-100 at 300k steps</h2>
+
+  <div class="panel">
+    <div class="panel-hd">
+      <span class="panel-t">Final checkpoint, all five arms</span>
+      <span class="panel-s">KID ×10³ ± SE over Inception subsets · z computed against REPA</span>
+    </div>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Arm</th><th>Precision</th>
+            <th class="n">FID</th><th class="n">vs REPA</th>
+            <th class="n">KID ×10³</th><th class="n">vs REPA</th><th class="n">z</th>
+            <th>Verdict</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="name"><span class="swatch f1"></span>Baseline</td><td class="sub">fp16</td>
+            <td class="n">14.573</td><td class="n up">+47.9%</td>
+            <td class="n">3.474 ±0.055</td><td class="n up">+144.8%</td><td class="n up">+33.1</td>
+            <td><span class="chip flat">Reference</span></td>
+          </tr>
+          <tr>
+            <td class="name"><span class="swatch f2"></span>REPA</td><td class="sub">fp16</td>
+            <td class="n">9.852</td><td class="n flatn">—</td>
+            <td class="n">1.419 ±0.029</td><td class="n flatn">—</td><td class="n flatn">—</td>
+            <td><span class="chip flat">Reference</span></td>
+          </tr>
+          <tr>
+            <td class="name"><span class="swatch f3"></span>HASTE</td><td class="sub">fp16</td>
+            <td class="n">9.782</td><td class="n flatn">−0.7%</td>
+            <td class="n">1.381 ±0.028</td><td class="n flatn">−2.7%</td><td class="n flatn">−0.9</td>
+            <td><span class="chip soft">Within noise</span></td>
+          </tr>
+          <tr>
+            <td class="name"><span class="swatch f4"></span>P-PCGrad</td><td class="sub">bf16</td>
+            <td class="n">9.522</td><td class="n down">−3.3%</td>
+            <td class="n">1.381 ±0.030</td><td class="n flatn">−2.7%</td><td class="n flatn">−0.9</td>
+            <td><span class="chip soft">Within noise</span></td>
+          </tr>
+          <tr class="hero">
+            <td class="name"><span class="swatch f5"></span>REPA-PCGrad</td><td class="sub">bf16</td>
+            <td class="n">9.015</td><td class="n down">−8.5%</td>
+            <td class="n">1.089 ±0.020</td><td class="n down">−23.3%</td><td class="n down">−9.4</td>
+            <td><span class="chip solid">Significant</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="cap">The SE here is over Inception feature subsets, not over training seeds — it measures how much <em>this checkpoint's</em> 10k samples wobble, not how much <em>the method</em> wobbles. z = −9.4 is real but it answers a narrower question than a reviewer will ask.</p>
+  </div>
+
+  <div class="panel">
+    <div class="panel-hd">
+      <span class="panel-t">FID trajectory</span>
+      <span class="panel-s">log scale · 10k samples · cfg 1.5</span>
+    </div>
+    <div class="chart">
+      <svg viewBox="0 0 790 374" role="img" aria-label="FID versus training step for five training arms on ImageNet-100. REPA-PCGrad separates from the other alignment arms by 50k steps and stays lowest throughout, ending at 9.02 against 9.52 to 9.85 for REPA, HASTE and P-PCGrad, and 14.57 for the baseline.">
+        <line class="grid" x1="62" y1="309.9" x2="600" y2="309.9"/><text class="ax ay" x="52" y="313.9">10</text>
+        <line class="grid" x1="62" y1="247.6" x2="600" y2="247.6"/><text class="ax ay" x="52" y="251.6">20</text>
+        <line class="grid" x1="62" y1="165.1" x2="600" y2="165.1"/><text class="ax ay" x="52" y="169.1">50</text>
+        <line class="grid" x1="62" y1="102.8" x2="600" y2="102.8"/><text class="ax ay" x="52" y="106.8">100</text>
+        <line class="grid" x1="62" y1="40.4" x2="600" y2="40.4"/><text class="ax ay" x="52" y="44.4">200</text>
+        <line class="axis" x1="62" y1="330" x2="600" y2="330"/>
+        <text class="ax axx" x="62" y="350">25k</text>
+        <text class="ax axx" x="208.7" y="350">100k</text>
+        <text class="ax axx" x="404.4" y="350">200k</text>
+        <text class="ax axx" x="600" y="350">300k</text>
+        <text class="ax" x="62" y="368" style="text-anchor:start">training step</text>
+        <text class="ax" x="20" y="24" style="text-anchor:start">FID</text>
+
+        <polyline class="ln s1" points="62.0,40.4 110.9,124.3 159.8,168.8 208.7,197.9 257.6,217.2 306.5,232.8 355.5,245.9 404.4,253.6 453.3,260.7 502.2,266.6 551.1,268.3 600.0,276.0"/>
+        <polyline class="ln s2" points="62.0,42.3 110.9,156.3 159.8,220.5 208.7,253.8 257.6,270.7 306.5,283.0 355.5,292.8 404.4,299.1 453.3,303.2 502.2,306.3 551.1,306.9 600.0,311.3"/>
+        <polyline class="ln s3" points="62.0,42.4 110.9,155.2 159.8,218.8 208.7,253.0 257.6,275.3 306.5,287.1 355.5,298.4 404.4,301.9 453.3,303.7 502.2,308.8 551.1,308.0 600.0,311.9"/>
+        <polyline class="ln s4" points="62.0,44.5 110.9,165.6 159.8,225.6 208.7,255.9 257.6,272.3 306.5,283.9 355.5,294.6 404.4,298.6 453.3,304.0 502.2,307.7 551.1,308.9 600.0,314.3"/>
+        <polyline class="ln s5" points="62.0,42.7 110.9,194.1 159.8,258.9 208.7,287.1 257.6,298.5 306.5,305.6 355.5,312.6 404.4,313.2 453.3,315.8 502.2,317.3 551.1,316.2 600.0,319.3"/>
+
+        <circle class="dot f1" cx="600" cy="276.0" r="3.6"/>
+        <circle class="dot f2" cx="600" cy="311.3" r="3.6"/>
+        <circle class="dot f3" cx="600" cy="311.9" r="3.6"/>
+        <circle class="dot f4" cx="600" cy="314.3" r="3.6"/>
+        <circle class="dot f5" cx="600" cy="319.3" r="3.6"/>
+
+        <text class="dl s1" x="612" y="273">Baseline</text><text class="dl2" x="612" y="287">14.57</text>
+        <line class="grid" x1="606" y1="313" x2="700" y2="313"/>
+        <text class="note" x="612" y="308">REPA · HASTE · P-PCGrad</text>
+        <text class="dl2" x="612" y="327">9.52 – 9.85</text>
+        <line class="grid" x1="604" y1="319.3" x2="608" y2="345"/>
+        <text class="dl s5" x="612" y="349">REPA-PCGrad</text><text class="dl2" x="612" y="363">9.02</text>
+      </svg>
+    </div>
+    <div class="legend">
+      <span><i style="background:var(--s1)"></i>Baseline (no alignment)</span>
+      <span><i style="background:var(--s2)"></i>REPA</span>
+      <span><i style="background:var(--s3)"></i>HASTE (align → 100k)</span>
+      <span><i style="background:var(--s4)"></i>P-PCGrad (Adam-whitened test)</span>
+      <span><i style="background:var(--s5)"></i>REPA-PCGrad (Euclidean test)</span>
+    </div>
+    <p class="cap">REPA-PCGrad separates by 50k steps (FID 36.2 vs REPA's 55.1) and is never overtaken. The other three alignment arms are visually one line from 150k onward.</p>
+  </div>
+</section>
+
+<section>
+  <p class="eyebrow">The efficiency claim</p>
+  <h2>Steps to reach a fixed FID</h2>
+  <div class="prose">
+    <p>This is the framing that survives scrutiny. Reading the curves horizontally rather than vertically turns a 0.84-FID endpoint gap into a compute claim, and compute claims don't evaporate when the curves converge.</p>
+  </div>
+
+  <div class="panel">
+    <div class="panel-hd">
+      <span class="panel-t">Training steps required (log-interpolated between checkpoints)</span>
+      <span class="panel-s">bars scaled to 300k</span>
+    </div>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Arm</th><th class="n">FID ≤ 20</th><th class="n">FID ≤ 16</th><th class="n">FID ≤ 14.57</th><th class="barcell">steps to FID 14.57 <span class="sub">(baseline's final)</span></th><th class="n">speedup</th></tr></thead>
+        <tbody>
+          <tr><td class="name"><span class="swatch f1"></span>Baseline</td><td class="n">180k</td><td class="n">265k</td><td class="n">300k</td>
+            <td class="barcell"><div class="bar"><span style="width:100%; background:var(--s1)"></span></div></td><td class="n flatn">1.00×</td></tr>
+          <tr><td class="name"><span class="swatch f2"></span>REPA</td><td class="n">95k</td><td class="n">120k</td><td class="n">136k</td>
+            <td class="barcell"><div class="bar"><span style="width:45.3%; background:var(--s2)"></span></div></td><td class="n down">2.21×</td></tr>
+          <tr><td class="name"><span class="swatch f3"></span>HASTE</td><td class="n">96k</td><td class="n">116k</td><td class="n">127k</td>
+            <td class="barcell"><div class="bar"><span style="width:42.2%; background:var(--s3)"></span></div></td><td class="n down">2.37×</td></tr>
+          <tr><td class="name"><span class="swatch f4"></span>P-PCGrad</td><td class="n">93k</td><td class="n">118k</td><td class="n">133k</td>
+            <td class="barcell"><div class="bar"><span style="width:44.4%; background:var(--s4)"></span></div></td><td class="n down">2.25×</td></tr>
+          <tr class="hero"><td class="name"><span class="swatch f5"></span>REPA-PCGrad</td><td class="n">71k</td><td class="n">83k</td><td class="n">90k</td>
+            <td class="barcell"><div class="bar"><span style="width:30.1%; background:var(--s5)"></span></div></td><td class="n down">3.33×</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="cap">Against REPA rather than baseline: REPA-PCGrad reaches REPA's 300k FID (9.852) at 170k steps — <strong>1.76× fewer steps</strong>. HASTE and P-PCGrad manage 1.01× and 1.05×.</p>
+  </div>
+
+  <h3>Corrected for wall-clock</h3>
+  <div class="prose">
+    <p>Surgery needs a second, partial backward pass through the alignment subgraph. The repo estimates that at ~1.2× the per-step cost of plain REPA — an estimate that is currently a comment in a README, not a measurement. Taking it at face value, the compute-matched comparison is REPA-PCGrad at 250k against REPA at 300k:</p>
+  </div>
+
+  <div class="panel">
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Equal wall-clock comparison</th><th class="n">FID</th><th class="n">KID ×10³</th></tr></thead>
+        <tbody>
+          <tr><td class="name">REPA @ 300k <span class="sub">1.0× / step</span></td><td class="n">9.852</td><td class="n">1.419</td></tr>
+          <tr class="hero"><td class="name">REPA-PCGrad @ 250k <span class="sub">1.2× / step</span></td><td class="n down">9.209</td><td class="n down">1.208</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="cap">The result survives the correction: −6.5% FID and −14.9% KID at matched compute. The honest speedup headline is therefore <strong>≈1.47× wall-clock</strong> to reach REPA's final quality, not 1.76×.</p>
+  </div>
+</section>
+
+<section>
+  <p class="eyebrow">The caveat a reviewer will find first</p>
+  <h2>The advantage is a head start, and it is being eaten</h2>
+
+  <div class="panel">
+    <div class="panel-hd">
+      <span class="panel-t">REPA-PCGrad KID relative to REPA</span>
+      <span class="panel-s">negative = better · peak −56% at 75k → −23% at 300k</span>
+    </div>
+    <div class="chart">
+      <svg viewBox="0 0 790 200" role="img" aria-label="Relative KID advantage of REPA-PCGrad over REPA across training. It deepens to minus 56 percent at 75k steps, then shrinks monotonically to minus 23 percent at 300k.">
+        <defs>
+          <linearGradient id="gapfill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="var(--s5)" stop-opacity="0.02"/>
+            <stop offset="100%" stop-color="var(--s5)" stop-opacity="0.20"/>
+          </linearGradient>
+        </defs>
+        <line class="axis" x1="54" y1="20" x2="600" y2="20"/>
+        <text class="ax ay" x="46" y="24">0%</text>
+        <line class="grid" x1="54" y1="63.3" x2="600" y2="63.3"/><text class="ax ay" x="46" y="67.3">−20%</text>
+        <line class="grid" x1="54" y1="106.7" x2="600" y2="106.7"/><text class="ax ay" x="46" y="110.7">−40%</text>
+        <line class="grid" x1="54" y1="150" x2="600" y2="150"/><text class="ax ay" x="46" y="154">−60%</text>
+        <polygon fill="url(#gapfill)" points="54.0,20.0 54.0,30.7 103.6,121.7 153.3,140.7 202.9,140.5 252.5,131.0 302.2,124.4 351.8,108.1 401.5,91.9 451.1,90.4 500.7,83.3 550.4,76.5 600.0,70.4 600.0,20.0"/>
+        <polyline class="ln s5" points="54.0,30.7 103.6,121.7 153.3,140.7 202.9,140.5 252.5,131.0 302.2,124.4 351.8,108.1 401.5,91.9 451.1,90.4 500.7,83.3 550.4,76.5 600.0,70.4"/>
+        <circle class="dot f5" cx="153.3" cy="140.7" r="3.6"/>
+        <circle class="dot f5" cx="600" cy="70.4" r="3.6"/>
+        <text class="note" x="163" y="158">peak advantage −55.7% @ 75k</text>
+        <text class="note" x="612" y="67">−23.3%</text>
+        <text class="dl2" x="612" y="81">@ 300k</text>
+        <text class="ax axx" x="54" y="176">25k</text>
+        <text class="ax axx" x="202.9" y="176">100k</text>
+        <text class="ax axx" x="401.5" y="176">200k</text>
+        <text class="ax axx" x="600" y="176">300k</text>
+        <text class="ax" x="54" y="194" style="text-anchor:start">training step</text>
+      </svg>
+    </div>
+    <p class="cap">The FID gap tells the same story: +18.9 at 50k, +5.8 at 100k, +2.4 at 175k, +0.84 at 300k. Monotone decay after 75k, with no sign of a floor.</p>
+  </div>
+
+  <div class="prose">
+    <p>Any reviewer who plots the difference will see this, so plot it yourself. Framed as a quality method, the paper invites "does it still win at 1M steps?" — and on this trend the honest answer is probably not. Framed as a <strong>convergence-acceleration method</strong>, the narrowing is not a weakness at all; it is the expected signature of an optimization fix, and it is exactly what REPA itself does relative to the baseline. Own it in the abstract rather than letting it be discovered in review.</p>
+  </div>
+</section>
+
+<section>
+  <p class="eyebrow">The second dataset</p>
+  <h2>CelebA: alignment does nothing, surgery does</h2>
+
+  <div class="prose">
+    <p>This is the result that carries the paper, and it is easy to under-read because REPA's own row is flat. The right comparison on CelebA is not surgery against REPA — it is surgery against the <em>baseline</em>, because REPA and the baseline are the same model here.</p>
+  </div>
+
+  <div class="panel">
+    <div class="panel-hd">
+      <span class="panel-t">CelebA-256, plateau over the last five checkpoints (220k–300k)</span>
+      <span class="panel-s">SiT-B/2 · 16 attribute classes</span>
+    </div>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Arm</th><th class="n">KID ×10³</th><th class="n">vs baseline</th><th class="n">FID</th><th class="n">vs REPA</th><th>Reading</th></tr></thead>
+        <tbody>
+          <tr><td class="name">Baseline <span class="sub">5k eval samples</span></td><td class="n">4.177</td><td class="n flatn">—</td><td class="n flatn">not computed</td><td class="n flatn">—</td><td><span class="chip flat">Reference</span></td></tr>
+          <tr><td class="name"><span class="swatch f2"></span>REPA</td><td class="n">4.183</td><td class="n up">+0.1%</td><td class="n">7.884</td><td class="n flatn">—</td><td><span class="chip risk">Alignment buys nothing</span></td></tr>
+          <tr><td class="name"><span class="swatch f3"></span>HASTE</td><td class="n">4.148</td><td class="n flatn">−0.7%</td><td class="n">7.876</td><td class="n flatn">−0.1%</td><td><span class="chip soft">Within noise</span></td></tr>
+          <tr><td class="name"><span class="swatch f5"></span>REPA-PCGrad <span class="sub">Euclidean</span></td><td class="n">4.080</td><td class="n down">−2.3%</td><td class="n">7.767</td><td class="n down">−1.5%</td><td><span class="chip soft">Small but consistent</span></td></tr>
+          <tr class="hero"><td class="name"><span class="swatch f4"></span>P-PCGrad <span class="sub">Adam-whitened</span></td><td class="n down">3.870</td><td class="n down">−7.3%</td><td class="n down">6.787</td><td class="n down">−13.9%</td><td><span class="chip solid">Best arm, both metrics</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="cap">KID is an unbiased estimator computed over fixed 1000-sample subsets, so the baseline's 5k-sample KID is directly comparable to the others' — only its error bar is wider. FID is computed over <em>all</em> samples and is biased in the sample count, which is why the baseline has no FID row.</p>
+  </div>
+
+  <h3>Precision is not the explanation</h3>
+  <div class="prose">
+    <p>The obvious objection is the bf16/fp16 split, and CelebA answers it internally. <em>Both</em> surgery arms ran bf16. They differ from each other by 12.6% FID — far more than either differs from fp16 REPA on the low end. A precision effect would move them together; it doesn't. On this dataset the confound is excluded by the runs already in hand.</p>
+  </div>
+
+  <div class="panel">
+    <div class="panel-hd">
+      <span class="panel-t">Surgery vs REPA — every cell</span>
+      <span class="panel-s">negative = better than REPA</span>
+    </div>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Dataset</th><th>Conflict test</th><th class="n">FID vs REPA</th><th class="n">KID vs REPA</th></tr></thead>
+        <tbody>
+          <tr class="hero"><td class="name">ImageNet-100</td><td><span class="swatch f5"></span>Euclidean</td><td class="n down">−8.5%</td><td class="n down">−23.3%</td></tr>
+          <tr><td class="name">ImageNet-100</td><td><span class="swatch f4"></span>Adam-whitened</td><td class="n down">−3.3%</td><td class="n down">−2.7%</td></tr>
+          <tr><td class="name">CelebA</td><td><span class="swatch f5"></span>Euclidean</td><td class="n down">−1.5%</td><td class="n down">−2.5%</td></tr>
+          <tr class="hero"><td class="name">CelebA</td><td><span class="swatch f4"></span>Adam-whitened</td><td class="n down">−13.9%</td><td class="n down">−7.5%</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="cap">Eight cells, eight improvements. The winning variant flips by dataset, but the sign never does — and in each dataset the better metric wins by a lot while the worse one still wins by a little.</p>
+  </div>
+
+  <h3>Why whitening should be dataset-dependent</h3>
+  <div class="prose">
+    <p>The rank flip is a prediction, not an embarrassment, once you notice that PCGrad's Euclidean test is inherited from an SGD formulation. The update actually applied here is Adam's, <em>P·g</em> with <em>P = 1/(√v̂+ε)</em> — so "these gradients conflict" should be evaluated in the metric the optimizer moves in, which makes the whitened test the principled one and the Euclidean test the legacy one.</p>
+    <p>Whitening changes the test most where the diffusion gradient's spectrum is most anisotropic. On CelebA — one visual domain, aligned faces, 16 attribute classes — a handful of high-curvature directions dominate the Euclidean dot product, and the test goes nearly blind to the low-curvature directions where the alignment gradient lives. On ImageNet-100's 100 diverse classes the spectrum is flatter, whitening buys less, and the extra variance of estimating v̂ costs more than it gains. That predicts precisely the observed ordering, and it is directly measurable: compare the diffusion gradient's effective rank, and the agreement rate between the two conflict tests, on both datasets.</p>
+  </div>
+
+  <h3>The gap does not shrink, and that is the point</h3>
+  <div class="prose">
+    <p>Both CelebA surgery evals ran at 25k samples, the same as every other arm, so the FID numbers are directly comparable and the −13.9% stands. What is left is a genuine and rather striking property of the gap: it does not decay.</p>
+  </div>
+
+  <div class="panel">
+    <div class="panel-hd">
+      <span class="panel-t">Absolute FID gap over training, indexed to its first value</span>
+      <span class="panel-s">a quality gain shrinks as the model improves · an additive offset doesn't</span>
+    </div>
+    <div class="chart">
+      <svg viewBox="0 0 790 214" role="img" aria-label="Absolute FID gap versus REPA, indexed to its first value. On ImageNet-100 the Euclidean surgery gap decays from 100 to 9 percent as training proceeds. On CelebA the preconditioned surgery gap stays near 110 percent throughout.">
+        <line class="grid" x1="58" y1="22" x2="600" y2="22"/><text class="ax ay" x="50" y="26">160%</text>
+        <line class="grid" x1="58" y1="58.5" x2="600" y2="58.5"/><text class="ax ay" x="50" y="62.5">120%</text>
+        <line class="grid" x1="58" y1="95" x2="600" y2="95"/><text class="ax ay" x="50" y="99">80%</text>
+        <line class="grid" x1="58" y1="131.5" x2="600" y2="131.5"/><text class="ax ay" x="50" y="135.5">40%</text>
+        <line class="axis" x1="58" y1="168" x2="600" y2="168"/><text class="ax ay" x="50" y="172">0%</text>
+        <polyline class="ln s4" points="58.0,76.8 103.2,60.9 148.3,64.3 193.5,34.9 238.7,41.8 283.8,57.2 329.0,64.0 374.2,71.7 419.3,59.7 464.5,61.3 509.7,78.5 554.8,62.5 600.0,65.6"/>
+        <polyline class="ln s5" points="91.9,76.8 148.3,111.9 204.8,128.1 261.2,138.8 317.7,144.8 374.2,152.1 430.6,154.3 487.1,156.4 543.5,158.1 600.0,159.9"/>
+        <circle class="dot f4" cx="600" cy="65.6" r="3.6"/>
+        <circle class="dot f5" cx="600" cy="159.9" r="3.6"/>
+        <text class="note" x="612" y="62">CelebA · whitened</text><text class="dl2" x="612" y="76">112% — flat</text>
+        <text class="note" x="612" y="156">ImageNet-100 · Euclidean</text><text class="dl2" x="612" y="170">9% — decayed</text>
+        <text class="ax axx" x="58" y="192">60k</text>
+        <text class="ax axx" x="261.2" y="192">150k</text>
+        <text class="ax axx" x="430.6" y="192">225k</text>
+        <text class="ax axx" x="600" y="192">300k</text>
+        <text class="ax" x="58" y="209" style="text-anchor:start">training step</text>
+      </svg>
+    </div>
+    <div class="legend">
+      <span><i style="background:var(--s4)"></i>CelebA — P-PCGrad vs REPA</span>
+      <span><i style="background:var(--s5)"></i>ImageNet-100 — REPA-PCGrad vs REPA</span>
+    </div>
+    <p class="cap">On CelebA the absolute FID gap holds at 1.14 ± 0.13 from 60k to 300k while the FID level itself falls 32% — so in relative terms it <em>grows</em>, 8.5% → 14%. The ImageNet gap does the opposite, decaying to 9% of its starting value. Same method family, two qualitatively different benefit profiles.</p>
+  </div>
+
+  <div class="prose">
+    <p>Read the two curves as two claims. <strong>ImageNet-100 is a convergence result:</strong> surgery finds the same basin sooner, and given enough steps plain REPA catches up. That is worth a speedup headline and nothing more. <strong>CelebA is a quality result:</strong> the advantage is established by 60k and then held, in absolute terms, for another 240k steps against a model that is still improving. Nothing in the trend suggests REPA closes it.</p>
+    <p>The one asymmetry worth explaining in the paper is that the CelebA gain is −13.9% in FID but −7.5% in KID, while ImageNet's is the other way round (−8.5% FID, −23.3% KID). FID is a Gaussian fit to the Inception features — first and second moments only — whereas KID's cubic kernel is sensitive to higher moments. A gain that is larger in FID than in KID is concentrated in the mean and covariance of the feature distribution: a better-centred, better-scaled match rather than a broad improvement in per-sample fidelity. That is a testable statement (decompose FID into its mean and trace terms, and inspect samples), and it is the kind of detail that makes a reviewer trust the rest of the paper.</p>
+  </div>
+</section>
+
+<section>
+  <p class="eyebrow">Threats to validity</p>
+  <h2>What the runs support, and what they can't</h2>
+
+  <div class="ledger">
+    <div class="card">
+      <h4><span class="chip solid">Solid</span></h4>
+      <ul>
+        <li><b>REPA reproduces.</b> −32.4% FID and a 2.21× step speedup over plain SiT on ImageNet-100. The pipeline is doing what it should.</li>
+        <li><b>REPA-PCGrad beats REPA on ImageNet-100.</b> The gap is large, opens early, holds at every one of twelve checkpoints, and survives compute matching.</li>
+        <li><b>REPA fails on CelebA.</b> Baseline, REPA and HASTE agree to within 0.05 KID. A controlled negative result is hard to argue with.</li>
+        <li><b>Surgery works where alignment doesn't.</b> On CelebA, P-PCGrad is 7.3% below the <em>baseline</em> in KID while REPA is 0.1% above it. Both surgery arms improve on REPA in all eight dataset × metric cells.</li>
+        <li><b>Precision is excluded on CelebA.</b> Both surgery arms ran bf16 and differ from each other by 12.6% FID, so bf16 cannot be what separates P-PCGrad from the field there.</li>
+        <li><b>HASTE costs less.</b> Post-termination steps load neither images nor encoder features. That part needs no defence.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4><span class="chip risk">Confounded or missing</span></h4>
+      <ul>
+        <li><b>Precision is uncontrolled on ImageNet-100.</b> Both surgery arms are forced to bf16; baseline, REPA and HASTE ran fp16. At the very first checkpoint the two bf16 arms already show KID 153.2 / 154.6 against 160.9–161.2 for all three fp16 arms — a clean split along the precision line. The CelebA runs rule this out for that dataset; ImageNet-100 still needs the control run.</li>
+        <li><b>The CelebA baseline still has no FID.</b> It was evaluated at 5k samples, so its KID is comparable (unbiased, fixed 1000-sample subsets) but no FID was written. The paper's best sentence — REPA does nothing, conflict-free REPA gives 14% — currently rests half on a row that does not exist. Eval-only fix.</li>
+        <li><b>The FID/KID asymmetry is unexplained.</b> CelebA gains more in FID than KID; ImageNet-100 the reverse. Not a threat to either result, but a reviewer will ask, and it points at what kind of improvement each variant actually delivers.</li>
+        <li><b>Baseline eval features were never regenerated.</b> The sweep log shows 0 of 12 checkpoints featurized for the baseline arm and 5 of 12 reused for HASTE. <span class="path">evaluate.py</span> keys its cache on <span class="path">(step, rank)</span> only — not on sample count, cfg, sampler steps, or <span class="path">--compile</span>, which the repo's own README warns is not bitwise identical to eager.</li>
+        <li><b>n = 1 seed everywhere.</b> The ± in every table is Inception subset noise, not run-to-run noise. Nothing here is a reason to doubt the direction of the results — every arm points the same way — but the effect <em>sizes</em> need seeds before they go in a table.</li>
+        <li><b>No mechanism data.</b> The premise is that ∇ℓ<sub>diff</sub> and ∇ℓ<sub>repa</sub> conflict at low noise. No <span class="path">rho.csv</span> exists anywhere in the repo. The method is currently motivated by an assertion.</li>
+        <li><b>The surgery is not isolated.</b> When the dot product is negative the update adds a positive multiple of the EMA diffusion direction — so it is also a momentum-like term. Nothing yet separates "conflict removal" from "extra smoothed diffusion gradient".</li>
+        <li><b>Scale and protocol.</b> ImageNet-<em>100</em>, SiT-B/2, FID-10K at a single cfg. None of these numbers are comparable to any published ImageNet-256 result.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section>
+  <p class="eyebrow">Positioning</p>
+  <h2>The paper this is, not the paper it looks like</h2>
+
+  <div class="prose">
+    <p>"We beat REPA by 0.8 FID" is a weak paper: one dataset, one model size, one seed, a shrinking margin. The same runs support a substantially stronger claim.</p>
+  </div>
+
+  <p class="pull">Representation alignment helps a diffusion transformer only where its gradient does not fight the denoising objective. Remove the conflicting component — in the metric the optimizer actually moves in — and you recover most of the loss, including on a dataset where alignment on its own is worth exactly nothing.</p>
+
+  <div class="prose">
+    <p>Three pillars hold that up, two of which are already in hand:</p>
+  </div>
+
+  <div class="panel">
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Pillar</th><th>Evidence</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td class="name">Conflict exists and is noise-dependent</td><td>ρ(t) = cos(∇ℓ<sub>diff</sub>, ∇ℓ<sub>repa</sub>) heatmap over noise level × step</td><td><span class="chip risk">Not measured</span></td></tr>
+          <tr><td class="name">Removing it accelerates convergence</td><td>ImageNet-100: 3.33× over baseline vs REPA's 2.21×</td><td><span class="chip solid">In hand</span></td></tr>
+          <tr class="hero"><td class="name">The gain is not just "more alignment"</td><td>CelebA: REPA = baseline (+0.1% KID), P-PCGrad −7.3% vs baseline</td><td><span class="chip solid">In hand (KID)</span></td></tr>
+          <tr><td class="name">The conflict metric should follow the optimizer</td><td>Whitened test wins on CelebA, Euclidean on ImageNet-100 — 8/8 cells beat REPA</td><td><span class="chip soft">Needs the anisotropy measurement</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="cap">The first pillar is the cheapest and the one that converts an empirical note into a mechanistic paper: <span class="path">training/measure_rho.py</span> already computes ρ(t) post-hoc from existing checkpoints, no retraining. The fourth turns the variant flip from a wrinkle into a second contribution.</p>
+  </div>
+
+  <h3>Venue</h3>
+  <div class="prose">
+    <p><strong>Workshop, 4–8 pages — reachable in about a week.</strong> ImageNet-100 + CelebA at SiT-B/2 is a normal workshop budget, and the negative CelebA result plus a mechanism figure is a genuinely interesting 4 pages. Needs: the ρ(t) figures, the bf16 control, the refreshed baseline eval, and two extra seeds on the two key arms.</p>
+    <p><strong>Main conference — a different project.</strong> Reviewers will require ImageNet-1K at 256px, SiT-XL/2 or at minimum SiT-L/2, FID-50K with a cfg sweep, multi-seed, and a comparison against the current REPA follow-up literature rather than against REPA alone. That is weeks of large-GPU time. Start the IN-1K run now if you want it, but don't hold the workshop version for it.</p>
+  </div>
+</section>
+
+<section>
+  <p class="eyebrow">Next runs, in priority order</p>
+  <h2>What to do this week</h2>
+
+  <ol class="queue">
+    <li>
+      <span class="qt">Measure ρ(t) on the checkpoints you already have</span>
+      <span class="qc"><span class="cost">no training · hours</span></span>
+      <p class="qd">Run <span class="path">training/measure_rho.py</span> over the REPA and REPA-PCGrad runs, then <span class="path">analyze_rho.py</span>. If cos(∇ℓ<sub>diff</sub>, ∇ℓ<sub>repa</sub>) really is positive at high noise and negative at low noise, that heatmap is the paper's Figure 1 and the whole story locks into place. If it isn't, you need a different explanation for why surgery works — better to learn that now than in review.</p>
+    </li>
+    <li>
+      <span class="qt">Train REPA in bf16</span>
+      <span class="qc"><span class="cost">1 run · 300k steps</span></span>
+      <p class="qd">The single experiment most likely to be demanded and the one that most cleanly kills the biggest confound. Everything in the headline table currently compares bf16 surgery against fp16 alignment. Until this run exists, the honest claim is "REPA-PCGrad in bf16 beats REPA in fp16".</p>
+    </li>
+    <li>
+      <span class="qt">Close the two eval gaps</span>
+      <span class="qc"><span class="cost">eval only · ~2 h</span></span>
+      <p class="qd">Regenerate the CelebA <em>baseline</em> at 25k so it has an FID — the paper's best sentence ("REPA does nothing, conflict-free REPA gives 14%") is currently half-supported, with the REPA-vs-baseline half resting on KID alone. Then pass <span class="path">--refresh --refresh-real</span> on the ImageNet baseline arm and HASTE's 25k–125k checkpoints, whose features came out of a cache keyed only on <span class="path">(step, rank)</span> and were never regenerated under this sweep's settings.</p>
+    </li>
+    <li>
+      <span class="qt">Two more seeds, on both datasets</span>
+      <span class="qc"><span class="cost">6 runs · 150k each</span></span>
+      <p class="qd">ImageNet-100 REPA and REPA-PCGrad stopped at 150k, where the FID gap is already 3.0 — you don't need 300k to establish separation. Add CelebA REPA and P-PCGrad, since that pair now carries a headline. This converts every error bar in the paper from "subset noise" to "run-to-run noise".</p>
+    </li>
+    <li>
+      <span class="qt">Ablate what the surgery is actually doing</span>
+      <span class="qc"><span class="cost">3 runs · 150k each</span></span>
+      <p class="qd">Three controls that separate conflict removal from a momentum effect: (a) instantaneous ∇ℓ<sub>diff</sub> as the reference instead of its EMA; (b) always project, dropping the negative-only clamp; (c) project against a fixed random direction of matched norm — the null control. Without (c) especially, a reviewer can argue the whole effect is a smoothed gradient term wearing a PCGrad costume.</p>
+    </li>
+    <li>
+      <span class="qt">Measure the gradient anisotropy that predicts the variant flip</span>
+      <span class="qc"><span class="cost">post-hoc · hours</span></span>
+      <p class="qd">The hypothesis is that the whitened conflict test wins where the diffusion gradient's spectrum is concentrated and loses where it is flat. Two quantities test it directly on checkpoints you already have: the effective rank of the diffusion gradient's second moment (Adam's v̂ is sitting in the optimizer state), and the disagreement rate between the Euclidean and whitened conflict tests on the same batch. If CelebA is the anisotropic one, the flip stops being an inconvenience and becomes a rule for choosing the metric. The natural follow-up is a knob rather than a switch: interpolate the preconditioner as <em>P<sup>α</sup></em> for α ∈ {0, ½, 1} and show the optimum moving between datasets.</p>
+    </li>
+    <li>
+      <span class="qt">Log how often the surgery fires</span>
+      <span class="qc"><span class="cost">cheap · add to (5)</span></span>
+      <p class="qd">Record the fraction of steps with ⟨g<sub>repa</sub>, g<sub>ema</sub>⟩ &lt; 0 and the norm of the removed component, bucketed by timestep. This is a second mechanism figure for nearly no cost, and it connects directly to the ρ(t) heatmap.</p>
+    </li>
+    <li>
+      <span class="qt">Fix the reporting protocol for the final table</span>
+      <span class="qc"><span class="cost">eval only</span></span>
+      <p class="qd">FID-50K at the 300k checkpoint with a cfg sweep over {1.0, 1.25, 1.5, 1.75, 2.0} for every arm. FID-10K at a single cfg is fine for run-to-run curves but will not pass as a headline number, and the cfg=1.0 column is what makes your result comparable to the REPA paper's tables.</p>
+    </li>
+    <li>
+      <span class="qt">Decide HASTE's role</span>
+      <span class="qc"><span class="cost">optional · 2 runs</span></span>
+      <p class="qd">It is a quality null at a 100k termination step. Either sweep the termination point over {50k, 200k} to show the null is robust, or demote HASTE to a cost baseline and say plainly that its published benefit did not reproduce as a quality gain at this scale. The second option is cheaper and equally honest.</p>
+    </li>
+  </ol>
+</section>
+
+<section>
+  <p class="eyebrow">Drafting guardrails</p>
+  <h2>Claims to make, claims to avoid</h2>
+
+  <div class="claims">
+    <div class="claim yes">
+      <p class="q">"Gradient surgery reaches REPA's 300k-step quality in 170k steps — a 1.47× wall-clock speedup on ImageNet-100."</p>
+      <p class="why">Directly measurable from the curves, robust to the narrowing gap, and already compute-corrected. This is the abstract sentence.</p>
+    </div>
+    <div class="claim no">
+      <p class="q">"Gradient surgery improves FID by 8.5% over REPA."</p>
+      <p class="why">True at 300k and shrinking monotonically since 75k. Stating it as a quality ceiling invites the one question the data cannot answer.</p>
+    </div>
+    <div class="claim yes">
+      <p class="q">"Representation alignment yields no measurable benefit on CelebA: baseline, REPA and HASTE plateau within 0.05 KID×10³ of one another."</p>
+      <p class="why">Three-arm agreement, one of the more defensible statements in the whole set. Regenerate the baseline's FID first.</p>
+    </div>
+    <div class="claim yes">
+      <p class="q">"On CelebA, where alignment gives no benefit at all, conflict surgery in Adam's metric improves KID by 7.3% over the unaligned baseline and FID by 13.9% over REPA — an advantage that is established by 60k steps and does not decay."</p>
+      <p class="why">The strongest sentence available, and the one that separates this from "REPA, tuned". Regenerate the baseline's FID so both halves rest on both metrics.</p>
+    </div>
+    <div class="claim no">
+      <p class="q">"The preconditioned variant is the better method."</p>
+      <p class="why">It wins on CelebA and comes second on ImageNet-100. Claim the <em>rule</em> — the conflict test belongs in the optimizer's metric, and how much that matters tracks the gradient spectrum — and report both variants on both datasets.</p>
+    </div>
+    <div class="claim yes">
+      <p class="q">"On ImageNet-100 the KID gap is roughly nine combined standard errors — but those errors are over Inception subsets, and we additionally report N seeds."</p>
+      <p class="why">Say what the error bar measures. Reviewers notice when a suspiciously large z-score is quietly doing work it wasn't built for.</p>
+    </div>
+    <div class="claim no">
+      <p class="q">"We achieve FID 9.02 on ImageNet."</p>
+      <p class="why">ImageNet-100, SiT-B/2, FID-10K, cfg 1.5. Every one of those qualifiers has to travel with the number, in the abstract and in the table caption.</p>
+    </div>
+  </div>
+</section>
+
+<p class="foot">
+  Derived from <code>imagenet_results/data.txt</code> (five arms × twelve checkpoints) and <code>celeba_results/*.csv</code>, with setup read from <code>training/train.sh</code>, <code>training/envs/imagenet100.env</code>, and the surgery implementation in <code>REPA/train.py</code>. Speedups are log-interpolated between adjacent checkpoints; the 1.2× per-step cost of surgery is the repo's own estimate and has not been measured.
+</p>
+
+</div>
+</body>
+</html>
